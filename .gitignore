@@ -1,0 +1,49 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+devpnl
+
+# Build output
+/bin/
+/dist/
+
+# Go
+*.test
+*.out
+go.work
+go.work.sum
+
+# UI / Node
+ui/node_modules/
+ui/build/
+ui/.svelte-kit/
+ui/.vite/
+
+# SQLite
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Docker (local dev artifacts)
+docker-compose.override.yml
