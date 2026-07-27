@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,7 +45,7 @@ const (
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// --- Listener -----------------------------------------------------------
+	// --- 1. Listener Initialization -----------------------------------------
 	addr := defaultAddr
 	if v := os.Getenv("DEVPNL_ADDR"); v != "" {
 		addr = v
@@ -51,76 +53,80 @@ func main() {
 
 	ln, err := sys.Listener(addr)
 	if err != nil {
-		log.Fatalf("listener: %v", err)
+		log.Fatalf("main: listener acquisition failed: %v", err)
 	}
-	log.Printf("listening on %s", ln.Addr())
+	defer ln.Close()
+	log.Printf("main: server listening on %s", ln.Addr())
 
-	// --- Database -------------------------------------------------------------
+	// --- Database Initialization ---------------------------------------------
 	dbPath := "devpnl.db"
 	if v := os.Getenv("DEVPNL_DB"); v != "" {
 		dbPath = v
 	}
 	database, err := db.Open(dbPath)
 	if err != nil {
-		log.Fatalf("database: %v", err)
+		log.Fatalf("main: database initialization failed: %v", err)
 	}
-	defer database.Close()
-	// --- Docker Client -------------------------------------------------------
+	defer func() {
+		if err := database.Close(); err != nil {
+			log.Printf("main: error closing database: %v", err)
+		}
+	}()
+
+	// --- External Clients ----------------------------------------------------
 	dockSocket := "/var/run/docker.sock"
 	if v := os.Getenv("DEVPNL_DOCKER_SOCKET"); v != "" {
 		dockSocket = v
 	}
 	dockClient := docker.NewClient(dockSocket)
 
-	// --- Caddy Client --------------------------------------------------------
 	caddyAdmin := "http://localhost:2019"
 	if v := os.Getenv("DEVPNL_CADDY_ADMIN"); v != "" {
 		caddyAdmin = v
 	}
 	caddyClient := caddy.NewClient(caddyAdmin)
-	_ = caddyClient // used when deploying containers to register routes
+	_ = caddyClient // retained for dynamic route management during container lifecycle
 
-	// --- Context & Idle Shutdown -------------------------------------------
+	// --- Context & Graceful Lifecycle ---------------------------------------
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Idle monitor triggers context cancellation when 0 active requests persist for idleTimeout.
 	idle := server.NewIdleShutdown(idleTimeout, cancel)
 
 	tracker := server.NewTracker(
-		idle.ResetIdle,  // onIdle  — restart the countdown
-		idle.CancelIdle, // onBusy  — cancel while requests are in flight
+		idle.ResetIdle,  // onIdle: restart idle countdown
+		idle.CancelIdle, // onBusy: cancel idle countdown while requests in-flight
 	)
 
-	// --- Routes -------------------------------------------------------------
+	// --- HTTP Route Registration --------------------------------------------
 	mux := http.NewServeMux()
 
-	// Health check (useful for Caddy, load balancers, etc.)
+	// Health check endpoint
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// API root.
+	// API root endpoint
 	mux.HandleFunc("GET /api/v1/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"version":"0.1.0","phase":5}`))
 	})
 
-	// On-Demand TLS verification endpoint.
-	// Caddy calls GET /ask?domain=<fqdn> during TLS handshakes.
-	// Return 200 if the domain is in our DB, 404 otherwise.
+	// On-Demand TLS verification endpoint for Caddy
 	mux.HandleFunc("GET /ask", func(w http.ResponseWriter, r *http.Request) {
-		domain := r.URL.Query().Get("domain")
-		if domain == "" {
+		domainName := r.URL.Query().Get("domain")
+		if domainName == "" {
 			http.Error(w, `{"error":"missing domain param"}`, http.StatusBadRequest)
 			return
 		}
 
-		exists, err := database.DomainExists(r.Context(), domain)
+		exists, err := database.DomainExists(r.Context(), domainName)
 		if err != nil {
-			log.Printf("ask: domain check error: %v", err)
+			log.Printf("ask: domain check error for %s: %v", domainName, err)
 			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 			return
 		}
@@ -136,72 +142,86 @@ func main() {
 		w.Write([]byte(`{"allowed":true}`))
 	})
 
-	// WebSocket endpoints for real-time container telemetry.
+	// WebSocket endpoints for real-time telemetry
 	mux.HandleFunc("/ws/stats", docker.HandleStatsWS(dockClient))
 	mux.HandleFunc("/ws/logs", docker.HandleLogsWS(dockClient))
 
-	// --- Embedded SPA -------------------------------------------------------
+	// --- 4. Embedded Svelte Frontend SPA Handler -----------------------------
 	uiContent := ui.FS()
 	fileServer := http.FileServer(http.FS(uiContent))
 
-	// SPA handler: try serving the file; if it doesn't exist, serve the
-	// fallback 200.html so client-side routing can take over.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		if path == "/" {
-			path = "index.html"
-		} else {
-			path = path[1:] // strip leading slash for fs.Stat
+		// Clean and sanitize requested URL path
+		cleanedPath := path.Clean(r.URL.Path)
+		if strings.HasPrefix(cleanedPath, "/") {
+			cleanedPath = cleanedPath[1:]
+		}
+		if cleanedPath == "" {
+			cleanedPath = "index.html"
 		}
 
-		if _, err := fs.Stat(uiContent, path); err != nil {
-			// File not found — serve the SPA fallback.
+		// Check if the requested file exists in embedded FS
+		if _, err := fs.Stat(uiContent, cleanedPath); err != nil {
+			// Fallback to SPA 200.html for client-side routing
 			r.URL.Path = "/200.html"
 		}
 
 		fileServer.ServeHTTP(w, r)
 	})
 
-	// Wrap the mux with request tracking middleware.
+	// Wrap root multiplexer with request tracking middleware
 	handler := tracker.Middleware(mux)
 
+	// --- Server Configuration -----------------------------------------------
+	// Note: Avoid setting WriteTimeout on the global server when streaming WebSockets,
+	// as WriteTimeout applies to the entire connection duration.
 	srv := &http.Server{
-		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
-	// --- Signal handling ----------------------------------------------------
+	// --- 3. Signal & Shutdown Lifecycle --------------------------------------
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		select {
-		case sig := <-sigCh:
-			log.Printf("received %s — shutting down", sig)
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	serverErrCh := make(chan error, 1)
 
-	// --- Serve --------------------------------------------------------------
+	// --- 2. Serve HTTP Requests ----------------------------------------------
 	go func() {
+		log.Println("main: starting HTTP server serve loop")
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("serve: %v", err)
+			serverErrCh <- err
 		}
+		close(serverErrCh)
 	}()
 
-	// Block until context is cancelled (by idle timer or signal).
-	<-ctx.Done()
+	// Await termination trigger (OS Signal, Idle Timeout Context Cancellation, or Serve Error)
+	select {
+	case sig := <-sigCh:
+		log.Printf("main: received signal %s — triggering graceful shutdown", sig)
+		cancel()
+	case <-ctx.Done():
+		log.Println("main: context cancelled (idle timeout or shutdown signal)")
+	case err := <-serverErrCh:
+		if err != nil {
+			log.Printf("main: HTTP server unexpected failure: %v", err)
+		}
+		cancel()
+	}
+
+	// Stop signal listening to release OS handlers
+	signal.Stop(sigCh)
 	idle.Stop()
 
-	log.Println("shutting down gracefully…")
+	// Execute orderly graceful shutdown
+	log.Println("main: performing graceful HTTP server shutdown...")
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer shutCancel()
 
 	if err := srv.Shutdown(shutCtx); err != nil {
-		log.Printf("shutdown error: %v", err)
+		log.Printf("main: error during server shutdown: %v", err)
 	}
-	log.Println("server stopped")
+
+	log.Println("main: shutdown sequence completed cleanly")
 }
