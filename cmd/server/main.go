@@ -142,6 +142,15 @@ func main() {
 		w.Write([]byte(`{"allowed":true}`))
 	})
 
+	// Dynamic Container, Volume & System Telemetry API
+	mux.HandleFunc("/api/containers", docker.HandleListContainers(dockClient, database))
+	mux.HandleFunc("/api/volumes", docker.HandleListVolumes(dockClient))
+	mux.HandleFunc("/api/system/stats", docker.HandleSystemStats(dockClient))
+	mux.HandleFunc("/api/containers/start-all", docker.HandleStartAllContainers(dockClient))
+	mux.HandleFunc("/api/containers/stop-all", docker.HandleStopAllContainers(dockClient))
+	mux.HandleFunc("/api/containers/start", docker.HandleStartContainer(dockClient))
+	mux.HandleFunc("/api/containers/stop", docker.HandleStopContainer(dockClient))
+
 	// WebSocket endpoints for real-time telemetry
 	mux.HandleFunc("/ws/stats", docker.HandleStatsWS(dockClient))
 	mux.HandleFunc("/ws/logs", docker.HandleLogsWS(dockClient))
@@ -151,6 +160,12 @@ func main() {
 	fileServer := http.FileServer(http.FS(uiContent))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Do not return SPA 200.html fallback for API or WebSocket endpoints
+		if strings.HasPrefix(r.URL.Path, "/api") || strings.HasPrefix(r.URL.Path, "/ws") || r.URL.Path == "/ask" || r.URL.Path == "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+
 		// Clean and sanitize requested URL path
 		cleanedPath := path.Clean(r.URL.Path)
 		if strings.HasPrefix(cleanedPath, "/") {

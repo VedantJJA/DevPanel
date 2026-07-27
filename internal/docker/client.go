@@ -3,6 +3,7 @@
 //
 // It implements:
 //   - Container stats (cgroups telemetry) via the /containers/{id}/stats API
+//   - Container management (list, start, stop, info) via Docker Engine API
 //   - Log streaming with 8-byte binary header demultiplexing
 //   - Docker Compose deployment via os/exec
 package docker
@@ -15,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -49,6 +51,194 @@ func NewClient(socketPath string) *Client {
 // because the transport dials Unix directly — the hostname is irrelevant.
 func apiURL(path string) string {
 	return "http://docker" + path
+}
+
+// ---------- Docker Engine API Types -----------------------------------------
+
+// ContainerSummary represents a container returned by /containers/json.
+type ContainerSummary struct {
+	ID      string `json:"Id"`
+	Names   []string `json:"Names"`
+	Image   string `json:"Image"`
+	State   string `json:"State"`
+	Status  string `json:"Status"`
+	Ports   []Port `json:"Ports"`
+	Created int64  `json:"Created"`
+}
+
+// Port represents a mapped port on a container.
+type Port struct {
+	IP          string `json:"IP"`
+	PrivatePort uint16 `json:"PrivatePort"`
+	PublicPort  uint16 `json:"PublicPort"`
+	Type        string `json:"Type"`
+}
+
+// VolumeSummary represents a volume returned by /volumes.
+type VolumeSummary struct {
+	Name       string `json:"Name"`
+	Driver     string `json:"Driver"`
+	Mountpoint string `json:"Mountpoint"`
+	CreatedAt  string `json:"CreatedAt"`
+	Scope      string `json:"Scope"`
+}
+
+type volumeListResponse struct {
+	Volumes []VolumeSummary `json:"Volumes"`
+}
+
+// SystemInfo represents Docker host information returned by /info.
+type SystemInfo struct {
+	Containers        int    `json:"Containers"`
+	ContainersRunning int    `json:"ContainersRunning"`
+	ContainersStopped int    `json:"ContainersStopped"`
+	NCPU              int    `json:"NCPU"`
+	MemTotal          int64  `json:"MemTotal"`
+	OperatingSystem   string `json:"OperatingSystem"`
+	Architecture      string `json:"Architecture"`
+}
+
+// ---------- System & Container Management API ------------------------------
+
+// SystemInfo fetches live system and container counts from Docker daemon.
+func (c *Client) SystemInfo(ctx context.Context) (*SystemInfo, error) {
+	url := apiURL("/info")
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("docker: info request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("docker: info call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("docker: info HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var info SystemInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("docker: info decode: %w", err)
+	}
+
+	return &info, nil
+}
+
+// ListContainers retrieves all containers from the Docker daemon.
+func (c *Client) ListContainers(ctx context.Context) ([]ContainerSummary, error) {
+	url := apiURL("/containers/json?all=true")
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("docker: list containers request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("docker: list containers: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("docker: list containers HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var containers []ContainerSummary
+	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
+		return nil, fmt.Errorf("docker: list containers decode: %w", err)
+	}
+
+	return containers, nil
+}
+
+// ListVolumes retrieves all volumes from the Docker daemon.
+func (c *Client) ListVolumes(ctx context.Context) ([]VolumeSummary, error) {
+	url := apiURL("/volumes")
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("docker: list volumes request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("docker: list volumes: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("docker: list volumes HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var res volumeListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("docker: list volumes decode: %w", err)
+	}
+
+	return res.Volumes, nil
+}
+
+// StartContainer sends a start command for the specified container.
+func (c *Client) StartContainer(ctx context.Context, containerID string) error {
+	url := apiURL(fmt.Sprintf("/containers/%s/start", containerID))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+	if err != nil {
+		return fmt.Errorf("docker: start container request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker: start container %s: %w", containerID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotModified {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("docker: start container %s HTTP %d: %s", containerID, resp.StatusCode, body)
+	}
+
+	return nil
+}
+
+// StopContainer sends a stop command for the specified container.
+func (c *Client) StopContainer(ctx context.Context, containerID string) error {
+	url := apiURL(fmt.Sprintf("/containers/%s/stop", containerID))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+	if err != nil {
+		return fmt.Errorf("docker: stop container request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker: stop container %s: %w", containerID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotModified {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("docker: stop container %s HTTP %d: %s", containerID, resp.StatusCode, body)
+	}
+
+	return nil
+}
+
+// FormatPorts turns a list of Port structs into a human-readable port mapping string.
+func FormatPorts(ports []Port) string {
+	if len(ports) == 0 {
+		return ""
+	}
+	var pairs []string
+	for _, p := range ports {
+		if p.PublicPort > 0 {
+			pairs = append(pairs, fmt.Sprintf("%d:%d", p.PublicPort, p.PrivatePort))
+		} else {
+			pairs = append(pairs, fmt.Sprintf("%d", p.PrivatePort))
+		}
+	}
+	return strings.Join(pairs, ", ")
 }
 
 // ---------- Container Stats -------------------------------------------------
@@ -206,12 +396,6 @@ type LogEntry struct {
 // Logs streams container logs, demultiplexing the 8-byte binary headers
 // that Docker uses to separate stdout and stderr. Results are sent to ch.
 // It blocks until ctx is cancelled or an error occurs.
-//
-// Docker log header format (8 bytes):
-//
-//	[0]    stream type: 0=stdin, 1=stdout, 2=stderr
-//	[1-3]  padding (zeros)
-//	[4-7]  uint32 big-endian frame size
 func (c *Client) Logs(ctx context.Context, containerID string, follow bool, tail string, ch chan<- *LogEntry) error {
 	url := apiURL(fmt.Sprintf("/containers/%s/logs?stdout=true&stderr=true&follow=%t&tail=%s&timestamps=true",
 		containerID, follow, tail))
