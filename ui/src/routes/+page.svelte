@@ -40,6 +40,7 @@
 	let loading = $state(true);
 	let actionLoading = $state<string | null>(null);
 	let errorMessage = $state<string | null>(null);
+	let pingMs = $state<number | null>(null);
 
 	let containers = $state<Container[]>([]);
 	let volumes = $state<Volume[]>([]);
@@ -53,9 +54,33 @@
 		cpus: 1
 	});
 
+	// Modals State
 	let selectedContainerLogs = $state<{ id: string; name: string; logs: string[] } | null>(null);
+	
+	// Delete Confirmation Modal State
+	let deleteTarget = $state<{ type: 'container' | 'volume'; idOrName: string; label: string } | null>(null);
+	let forceDelete = $state(false);
+
+	// Error Alert Popup Modal State
+	let errorModal = $state<{ title: string; message: string; details?: string } | null>(null);
+
 	let logSocket: WebSocket | null = null;
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
+	let pingInterval: ReturnType<typeof setInterval> | null = null;
+	let autoRefreshRateSec = $state(5);
+
+	// Measure Webpage Ping / Server Latency
+	async function measurePing() {
+		const start = performance.now();
+		try {
+			const res = await fetch('/healthz', { cache: 'no-store' });
+			if (res.ok) {
+				pingMs = Math.round(performance.now() - start);
+			}
+		} catch (e) {
+			pingMs = null;
+		}
+	}
 
 	// Fetch live container list, volumes & system telemetry from Go API
 	async function fetchData() {
@@ -106,16 +131,15 @@
 		Math.min(100, Math.round(containers.filter(c => c.status === 'running').reduce((acc, c) => acc + (c.cpuPercent || 0), 0) * 10) / 10)
 	);
 
-	// Batch Container Actions
+	// Batch Operations
 	async function handleStartAll() {
 		actionLoading = 'start-all';
-		errorMessage = null;
 		try {
 			const res = await fetch('/api/containers/start-all', { method: 'POST' });
 			if (!res.ok) throw new Error(await res.text());
 			await fetchData();
 		} catch (e: any) {
-			errorMessage = `Start all failed: ${e.message}`;
+			openErrorPopup('Batch Operation Error', `Failed to start all containers: ${e.message}`);
 		} finally {
 			actionLoading = null;
 		}
@@ -123,13 +147,12 @@
 
 	async function handleStopAll() {
 		actionLoading = 'stop-all';
-		errorMessage = null;
 		try {
 			const res = await fetch('/api/containers/stop-all', { method: 'POST' });
 			if (!res.ok) throw new Error(await res.text());
 			await fetchData();
 		} catch (e: any) {
-			errorMessage = `Stop all failed: ${e.message}`;
+			openErrorPopup('Batch Operation Error', `Failed to stop all containers: ${e.message}`);
 		} finally {
 			actionLoading = null;
 		}
@@ -137,17 +160,87 @@
 
 	async function toggleContainerStatus(container: Container) {
 		actionLoading = container.id;
-		errorMessage = null;
 		const action = container.status === 'running' ? 'stop' : 'start';
 		try {
 			const res = await fetch(`/api/containers/${action}?id=${container.id}`, { method: 'POST' });
 			if (!res.ok) throw new Error(await res.text());
 			await fetchData();
 		} catch (e: any) {
-			errorMessage = `Failed to ${action} container ${container.name}: ${e.message}`;
+			openErrorPopup(`Container ${action} Failed`, `Unable to ${action} container '${container.name}'.`, e.message);
 		} finally {
 			actionLoading = null;
 		}
+	}
+
+	// Confirm & Delete Handlers
+	function promptDeleteContainer(container: Container) {
+		deleteTarget = {
+			type: 'container',
+			idOrName: container.id,
+			label: container.name
+		};
+		forceDelete = false;
+	}
+
+	function promptDeleteVolume(volume: Volume) {
+		deleteTarget = {
+			type: 'volume',
+			idOrName: volume.Name,
+			label: volume.Name
+		};
+		forceDelete = false;
+	}
+
+	async function confirmDelete() {
+		if (!deleteTarget) return;
+		const target = deleteTarget;
+		deleteTarget = null; // Close confirmation modal
+
+		actionLoading = target.idOrName;
+		try {
+			if (target.type === 'container') {
+				const res = await fetch(`/api/containers/delete?id=${target.idOrName}&force=${forceDelete}`, { method: 'DELETE' });
+				const data = await res.json();
+				if (!res.ok || data.error) {
+					openErrorPopup('Container Deletion Error', data.error || 'Failed to remove container.', data.details);
+				} else {
+					await fetchData();
+				}
+			} else if (target.type === 'volume') {
+				const res = await fetch(`/api/volumes/delete?name=${encodeURIComponent(target.idOrName)}&force=${forceDelete}`, { method: 'DELETE' });
+				const data = await res.json();
+				if (!res.ok || data.error) {
+					openErrorPopup('Volume Deletion Error', data.error || 'Failed to remove volume.', data.details);
+				} else {
+					await fetchData();
+				}
+			}
+		} catch (err: any) {
+			openErrorPopup('Network Request Error', `Failed to execute delete command: ${err.message}`);
+		} finally {
+			actionLoading = null;
+		}
+	}
+
+	async function handlePruneSystem() {
+		actionLoading = 'prune';
+		try {
+			const res = await fetch('/api/system/prune', { method: 'POST' });
+			if (!res.ok) throw new Error(await res.text());
+			await fetchData();
+		} catch (e: any) {
+			openErrorPopup('Prune Error', `System prune failed: ${e.message}`);
+		} finally {
+			actionLoading = null;
+		}
+	}
+
+	function openErrorPopup(title: string, message: string, details?: string) {
+		errorModal = { title, message, details };
+	}
+
+	function closeErrorPopup() {
+		errorModal = null;
 	}
 
 	// Live WebSocket Log Streaming
@@ -230,11 +323,14 @@
 
 	onMount(() => {
 		fetchData();
-		pollInterval = setInterval(fetchData, 5000);
+		measurePing();
+		pollInterval = setInterval(fetchData, autoRefreshRateSec * 1000);
+		pingInterval = setInterval(measurePing, 3000);
 	});
 
 	onDestroy(() => {
 		if (pollInterval) clearInterval(pollInterval);
+		if (pingInterval) clearInterval(pingInterval);
 		closeLogStream();
 	});
 </script>
@@ -304,13 +400,19 @@
 			</nav>
 		</div>
 
-		<!-- Status Footer -->
+		<!-- Status & Webpage Ping Footer -->
 		<div class="border-t border-neutral-800/80 pt-4 px-2 space-y-2">
+			<!-- Webpage Ping RTT Indicator -->
+			<div class="flex items-center justify-between text-xs text-neutral-400">
+				<span>Webpage Latency</span>
+				<span class="inline-flex items-center gap-1.5 font-mono text-xs {pingMs !== null ? 'text-emerald-400' : 'text-rose-400'}">
+					<span class="w-2 h-2 rounded-full {pingMs !== null ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}"></span>
+					{pingMs !== null ? `${pingMs} ms` : 'Offline'}
+				</span>
+			</div>
 			<div class="flex items-center justify-between text-xs text-neutral-400">
 				<span>Scale-to-Zero</span>
-				<span class="inline-flex items-center gap-1.5 text-emerald-400 font-mono">
-					<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Active
-				</span>
+				<span class="inline-flex items-center gap-1.5 text-emerald-400 font-mono">Active</span>
 			</div>
 			<div class="flex items-center justify-between text-xs text-neutral-500 font-mono">
 				<span>Systemd Socket</span>
@@ -328,8 +430,14 @@
 				<p class="text-xs text-neutral-400 mt-0.5">Real-time system telemetry and Docker resource controls</p>
 			</div>
 
-			<!-- Action Bar Controls -->
+			<!-- Action Bar & Ping Badge -->
 			<div class="flex items-center gap-3">
+				<!-- Webpage Ping Badge -->
+				<div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-900 border border-neutral-800 text-xs font-mono text-neutral-300">
+					<span class="w-2 h-2 rounded-full {pingMs !== null ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}"></span>
+					<span>Ping: <strong class="text-neutral-100">{pingMs !== null ? `${pingMs} ms` : 'Disconnected'}</strong></span>
+				</div>
+
 				<button
 					onclick={fetchData}
 					disabled={loading}
@@ -371,7 +479,7 @@
 
 		<!-- Content Area -->
 		<div class="p-8 space-y-8 max-w-7xl w-full mx-auto">
-			<!-- Error Alert Banner -->
+			<!-- Inline Error Alert Banner -->
 			{#if errorMessage}
 				<div class="p-4 rounded-xl bg-rose-950/50 border border-rose-800/80 text-rose-300 text-sm flex items-center justify-between">
 					<div class="flex items-center gap-3">
@@ -382,7 +490,7 @@
 				</div>
 			{/if}
 
-			<!-- Dynamic System Metrics Banner (Shown across tabs) -->
+			<!-- Dynamic System Metrics Banner -->
 			<section class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
 				<!-- Active Containers Count -->
 				<div class="p-5 rounded-2xl bg-neutral-900/70 border border-neutral-800 flex flex-col justify-between shadow-sm">
@@ -624,6 +732,15 @@
 																{container.status === 'running' ? 'Stop' : 'Start'}
 															{/if}
 														</button>
+
+														<!-- Delete Container Button -->
+														<button
+															onclick={() => promptDeleteContainer(container)}
+															title="Delete Container"
+															class="p-1.5 rounded-lg bg-neutral-800 hover:bg-rose-600/30 text-neutral-400 hover:text-rose-400 border border-neutral-700/60 hover:border-rose-500/30 transition-all"
+														>
+															<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+														</button>
 													</div>
 												</td>
 											</tr>
@@ -653,18 +770,19 @@
 										<th class="py-4 px-4">Driver</th>
 										<th class="py-4 px-6">Mountpoint Path</th>
 										<th class="py-4 px-4">Scope</th>
+										<th class="py-4 px-6 text-right">Actions</th>
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-neutral-800/60 text-sm">
 									{#if loading && volumes.length === 0}
 										<tr>
-											<td colspan="4" class="py-12 text-center text-neutral-500">
+											<td colspan="5" class="py-12 text-center text-neutral-500">
 												Fetching volumes from Docker engine...
 											</td>
 										</tr>
 									{:else if volumes.length === 0}
 										<tr>
-											<td colspan="4" class="py-12 text-center text-neutral-500">
+											<td colspan="5" class="py-12 text-center text-neutral-500">
 												No Docker volumes found on server.
 											</td>
 										</tr>
@@ -683,6 +801,15 @@
 												<td class="py-4 px-4 text-xs font-mono text-neutral-400">
 													{volume.Scope || 'local'}
 												</td>
+												<td class="py-4 px-6 text-right">
+													<button
+														onclick={() => promptDeleteVolume(volume)}
+														title="Delete Volume"
+														class="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-rose-600/30 text-rose-400 text-xs font-semibold border border-neutral-700/60 hover:border-rose-500/30 transition-all"
+													>
+														Delete
+													</button>
+												</td>
 											</tr>
 										{/each}
 									{/if}
@@ -699,6 +826,37 @@
 					<h3 class="text-lg font-bold text-neutral-100">DevPanel Server Settings</h3>
 
 					<div class="space-y-4">
+						<!-- Auto Refresh Rate Controls -->
+						<div class="p-6 rounded-2xl border border-neutral-800 bg-neutral-900/60 space-y-3">
+							<h4 class="font-semibold text-neutral-200 text-sm">Dashboard Auto-Refresh Interval</h4>
+							<p class="text-xs text-neutral-400">Configure how frequently telemetry and Docker stats update.</p>
+							<div class="flex items-center gap-2 pt-2">
+								{#each [2, 5, 10] as rate}
+									<button
+										onclick={() => (autoRefreshRateSec = rate)}
+										class="px-3.5 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border {autoRefreshRateSec === rate ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-neutral-800 text-neutral-400 border-neutral-700'}"
+									>{rate}s</button>
+								{/each}
+							</div>
+						</div>
+
+						<!-- System Prune Action -->
+						<div class="p-6 rounded-2xl border border-neutral-800 bg-neutral-900/60 space-y-3">
+							<div class="flex items-center justify-between">
+								<div>
+									<h4 class="font-semibold text-neutral-200 text-sm">Prune Unused Docker System Resources</h4>
+									<p class="text-xs text-neutral-400 mt-1">Remove all stopped containers and dangling volumes to free disk space.</p>
+								</div>
+								<button
+									onclick={handlePruneSystem}
+									disabled={actionLoading === 'prune'}
+									class="px-4 py-2 rounded-xl bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-white border border-rose-500/30 text-xs font-semibold transition-all disabled:opacity-50"
+								>
+									{actionLoading === 'prune' ? 'Pruning...' : 'Prune Unused'}
+								</button>
+							</div>
+						</div>
+
 						<!-- Socket Activation Settings -->
 						<div class="p-6 rounded-2xl border border-neutral-800 bg-neutral-900/60 space-y-3">
 							<div class="flex items-center justify-between">
@@ -727,6 +885,84 @@
 						</div>
 					</div>
 				</section>
+			{/if}
+
+			<!-- DELETE CONFIRMATION MODAL -->
+			{#if deleteTarget}
+				<div class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+					<div class="bg-neutral-900 border border-neutral-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+						<div class="flex items-center gap-3">
+							<div class="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+							</div>
+							<div>
+								<h3 class="font-bold text-neutral-100">Confirm Deletion</h3>
+								<p class="text-xs text-neutral-400">Action cannot be undone</p>
+							</div>
+						</div>
+
+						<p class="text-sm text-neutral-300">
+							Are you sure you want to permanently delete {deleteTarget.type} <strong class="text-neutral-100 font-mono">{deleteTarget.label}</strong>?
+						</p>
+
+						<div class="flex items-center gap-2 pt-1">
+							<input
+								type="checkbox"
+								id="forceCheck"
+								bind:checked={forceDelete}
+								class="rounded bg-neutral-800 border-neutral-700 text-emerald-500 focus:ring-emerald-500/30"
+							/>
+							<label for="forceCheck" class="text-xs text-neutral-400 select-none cursor-pointer">Force deletion (force kill if running / in-use)</label>
+						</div>
+
+						<div class="flex items-center justify-end gap-3 pt-3 border-t border-neutral-800">
+							<button
+								onclick={() => (deleteTarget = null)}
+								class="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold transition-all"
+							>
+								Cancel
+							</button>
+							<button
+								onclick={confirmDelete}
+								class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition-all shadow-sm shadow-rose-950"
+							>
+								Confirm Delete
+							</button>
+						</div>
+					</div>
+				</div>
+			{/if}
+
+			<!-- ERROR ALERT POPUP MODAL -->
+			{#if errorModal}
+				<div class="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
+					<div class="bg-neutral-900 border border-rose-900/60 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in duration-200">
+						<div class="flex items-start gap-4">
+							<div class="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+								<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+							</div>
+							<div class="space-y-1">
+								<h3 class="font-bold text-rose-300 text-base">{errorModal.title}</h3>
+								<p class="text-xs text-neutral-300 leading-relaxed">{errorModal.message}</p>
+							</div>
+						</div>
+
+						{#if errorModal.details}
+							<div class="bg-neutral-950 p-3 rounded-xl border border-neutral-800 text-xs font-mono text-rose-400/90 overflow-x-auto max-h-36">
+								{errorModal.details}
+							</div>
+						{/if}
+
+						<div class="flex items-center justify-end pt-2">
+							<button
+								onclick={closeErrorPopup}
+								class="px-5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-100 text-xs font-semibold border border-neutral-700/60 transition-all"
+							>
+								Cancel & Dismiss
+							</button>
+						</div>
+					</div>
+				</div>
 			{/if}
 
 			<!-- WebSocket Live Log Stream Drawer -->

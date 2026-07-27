@@ -225,6 +225,79 @@ func (c *Client) StopContainer(ctx context.Context, containerID string) error {
 	return nil
 }
 
+// RemoveContainer deletes a container. If force is true, sends SIGKILL if running.
+func (c *Client) RemoveContainer(ctx context.Context, containerID string, force bool) error {
+	url := apiURL(fmt.Sprintf("/containers/%s?v=true&force=%t", containerID, force))
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("docker: remove container request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker: remove container %s: %w", containerID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		var apiErr struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &apiErr) == nil && apiErr.Message != "" {
+			return fmt.Errorf("%s", apiErr.Message)
+		}
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	return nil
+}
+
+// RemoveVolume deletes a volume by name. If force is true, removes even if in use.
+func (c *Client) RemoveVolume(ctx context.Context, volumeName string, force bool) error {
+	url := apiURL(fmt.Sprintf("/volumes/%s?force=%t", volumeName, force))
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("docker: remove volume request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker: remove volume %s: %w", volumeName, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		var apiErr struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &apiErr) == nil && apiErr.Message != "" {
+			return fmt.Errorf("%s", apiErr.Message)
+		}
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	return nil
+}
+
+// PruneSystem prunes stopped containers and unused volumes.
+func (c *Client) PruneSystem(ctx context.Context) error {
+	cUrl := apiURL("/containers/prune")
+	cReq, _ := http.NewRequestWithContext(ctx, "POST", cUrl, nil)
+	if cResp, err := c.http.Do(cReq); err == nil {
+		cResp.Body.Close()
+	}
+
+	vUrl := apiURL("/volumes/prune")
+	vReq, _ := http.NewRequestWithContext(ctx, "POST", vUrl, nil)
+	if vResp, err := c.http.Do(vReq); err == nil {
+		vResp.Body.Close()
+	}
+
+	return nil
+}
+
 // FormatPorts turns a list of Port structs into a human-readable port mapping string.
 func FormatPorts(ports []Port) string {
 	if len(ports) == 0 {

@@ -2,6 +2,7 @@ package docker
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -236,6 +237,85 @@ func HandleStopAllContainers(dockClient *Client) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"success"}`))
+	}
+}
+
+// HandleDeleteContainer deletes a container by ID from Docker and SQLite DB. Returns structured JSON error if failed.
+func HandleDeleteContainer(dockClient *Client, database *db.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		id := r.URL.Query().Get("id")
+		force := r.URL.Query().Get("force") == "true"
+
+		if id == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Missing container ID parameter"})
+			return
+		}
+
+		var dockerErr error
+		if dockClient != nil {
+			dockerErr = dockClient.RemoveContainer(r.Context(), id, force)
+		}
+
+		if database != nil {
+			_ = database.DeleteContainerByDockerID(r.Context(), id)
+		}
+
+		if dockerErr != nil {
+			log.Printf("api: delete container %s error: %v", id, dockerErr)
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   dockerErr.Error(),
+				"details": fmt.Sprintf("Failed to remove container '%s'. If it is running, stop it first or enable 'Force deletion'.", id),
+			})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Container deleted successfully"})
+	}
+}
+
+// HandleDeleteVolume deletes a volume by name. Returns structured JSON error if failed.
+func HandleDeleteVolume(dockClient *Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		name := r.URL.Query().Get("name")
+		force := r.URL.Query().Get("force") == "true"
+
+		if name == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Missing volume name parameter"})
+			return
+		}
+
+		if err := dockClient.RemoveVolume(r.Context(), name, force); err != nil {
+			log.Printf("api: delete volume %s error: %v", name, err)
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   err.Error(),
+				"details": fmt.Sprintf("Failed to remove volume '%s'. It may be in use by an active or stopped container.", name),
+			})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Volume deleted successfully"})
+	}
+}
+
+// HandlePruneSystem prunes stopped containers and unused volumes.
+func HandlePruneSystem(dockClient *Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := dockClient.PruneSystem(r.Context()); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "System pruned successfully"})
 	}
 }
 

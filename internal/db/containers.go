@@ -113,3 +113,13 @@ func (d *DB) DeleteContainer(ctx context.Context, id int64) error {
 	}
 	return nil
 }
+
+// DeleteContainerByDockerID removes a container record by Docker ID or Name.
+func (d *DB) DeleteContainerByDockerID(ctx context.Context, containerID string) error {
+	ctx = contextOrBg(ctx)
+	_, err := d.conn.ExecContext(ctx, `DELETE FROM containers WHERE container_id = ? OR name = ?`, containerID, containerID)
+	if err != nil {
+		return fmt.Errorf("db: delete container by docker id %q: %w", containerID, err)
+	}
+	return nil
+}
