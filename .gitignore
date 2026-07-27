@@ -5,6 +5,8 @@
 *.so
 *.dylib
 devpnl
+devpanel
+devpanel_*
 
 # Build output
 /bin/
@@ -21,6 +23,7 @@ ui/node_modules/
 ui/build/
 ui/.svelte-kit/
 ui/.vite/
+.svelte-kit/
 
 # SQLite
 *.db
@@ -28,9 +31,10 @@ ui/.vite/
 *.db-shm
 *.db-wal
 
-# IDE
+# IDE / Editor
 .vscode/
 .idea/
+.agents/
 *.swp
 *.swo
 *~
