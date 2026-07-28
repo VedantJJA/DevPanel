@@ -12,11 +12,12 @@ type HostMetrics struct {
 	TotalMemMB float64 `json:"totalMemMb"`
 	UsedMemMB  float64 `json:"usedMemMb"`
 	MemPercent float64 `json:"memPercent"`
+	CpuPercent float64 `json:"cpuPercent"`
 	OS         string  `json:"os"`
 	Arch       string  `json:"arch"`
 }
 
-// GetHostMetrics retrieves exact CPU core count, total physical RAM, used RAM, OS, and Arch automatically.
+// GetHostMetrics retrieves exact CPU core count, CPU load %, total physical RAM, used RAM, OS, and Arch automatically.
 func GetHostMetrics() HostMetrics {
 	cpus := runtime.NumCPU()
 	goOS := runtime.GOOS
@@ -34,6 +35,7 @@ func GetHostMetrics() HostMetrics {
 
 	// Calls platform-specific implementation (system_windows.go or system_other.go)
 	totalMB, usedMB := getPlatformMemory()
+	cpuPct := getPlatformCPULoad(cpus)
 
 	memPct := 0.0
 	if totalMB > 0 {
@@ -45,6 +47,7 @@ func GetHostMetrics() HostMetrics {
 		TotalMemMB: totalMB,
 		UsedMemMB:  usedMB,
 		MemPercent: memPct,
+		CpuPercent: cpuPct,
 		OS:         fmt.Sprintf("%s (%s)", osName, archName),
 		Arch:       archName,
 	}
