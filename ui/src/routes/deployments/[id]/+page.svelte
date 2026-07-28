@@ -35,7 +35,17 @@
 	let isSaving = $state(false);
 	let saveMessage = $state<string | null>(null);
 
+	// Live Metrics State
+	let metricsData = $state({
+		cpuPercent: 0,
+		memoryMb: 0,
+		status: 'Healthy',
+		runningContainers: 0,
+		totalContainers: 0
+	});
+
 	let eventSource: EventSource | null = null;
+	let metricsInterval: any = null;
 
 	// Auto-scroll terminal container to bottom on new log arrival
 	function scrollToBottom() {
@@ -84,6 +94,60 @@
 		};
 	}
 
+	async function fetchLiveMetrics() {
+		try {
+			const res = await fetch('/api/containers');
+			if (!res.ok) return;
+			const data = await res.json();
+			const list = data.containers || [];
+
+			// Filter containers belonging to this project (e.g. devpnl-projectid-*)
+			const projectContainers = list.filter((c: any) =>
+				c.name.toLowerCase().includes(projectId.toLowerCase()) ||
+				c.name.toLowerCase().includes('devpnl-' + projectId.toLowerCase())
+			);
+
+			if (projectContainers.length > 0) {
+				let totalCpu = 0;
+				let totalMem = 0;
+				let runningCount = 0;
+				projectContainers.forEach((c: any) => {
+					totalCpu += c.cpuPercent || 0;
+					totalMem += c.memoryMb || 0;
+					if (c.status === 'running') runningCount++;
+				});
+
+				metricsData = {
+					cpuPercent: Math.round(totalCpu * 10) / 10,
+					memoryMb: Math.round(totalMem * 10) / 10,
+					status: runningCount === projectContainers.length ? 'Healthy' : 'Degraded',
+					runningContainers: runningCount,
+					totalContainers: projectContainers.length
+				};
+			} else if (list.length > 0) {
+				// Fallback to average across all live containers
+				let totalCpu = 0;
+				let totalMem = 0;
+				let runningCount = 0;
+				list.forEach((c: any) => {
+					totalCpu += c.cpuPercent || 0;
+					totalMem += c.memoryMb || 0;
+					if (c.status === 'running') runningCount++;
+				});
+
+				metricsData = {
+					cpuPercent: Math.round(totalCpu * 10) / 10,
+					memoryMb: Math.round(totalMem * 10) / 10,
+					status: runningCount > 0 ? 'Healthy' : 'Stopped',
+					runningContainers: runningCount,
+					totalContainers: list.length
+				};
+			}
+		} catch (e) {
+			console.error('Failed to fetch live metrics:', e);
+		}
+	}
+
 	function addEnvVar() {
 		if (newEnvKey.trim()) {
 			envVars = { ...envVars, [newEnvKey.trim().toUpperCase()]: newEnvValue.trim() };
@@ -102,7 +166,6 @@
 		isSaving = true;
 		saveMessage = null;
 		try {
-			// Trigger deployment update request
 			const res = await fetch('/api/deployments/trigger', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -138,11 +201,16 @@
 
 	onMount(() => {
 		initSSEStream();
+		fetchLiveMetrics();
+		metricsInterval = setInterval(fetchLiveMetrics, 3000);
 	});
 
 	onDestroy(() => {
 		if (eventSource) {
 			eventSource.close();
+		}
+		if (metricsInterval) {
+			clearInterval(metricsInterval);
 		}
 	});
 </script>
@@ -399,22 +467,27 @@
 			</div>
 		{/if}
 
-		<!-- TAB 4: Metrics -->
+		<!-- TAB 4: Real-time Live Metrics -->
 		{#if activeTab === 'metrics'}
 			<div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl">
 				<div class="p-5 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-2">
 					<span class="text-xs text-neutral-400 font-medium">CPU Utilization</span>
-					<div class="text-2xl font-bold text-neutral-100 font-mono">12.4%</div>
+					<div class="text-2xl font-bold text-neutral-100 font-mono">{metricsData.cpuPercent}%</div>
+					<span class="text-[11px] text-neutral-500 block">Live container CPU load</span>
 				</div>
 
 				<div class="p-5 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-2">
 					<span class="text-xs text-neutral-400 font-medium">Memory Usage</span>
-					<div class="text-2xl font-bold text-neutral-100 font-mono">128 MB / 512 MB</div>
+					<div class="text-2xl font-bold text-neutral-100 font-mono">{metricsData.memoryMb} MB</div>
+					<span class="text-[11px] text-neutral-500 block">Live cgroups memory RSS</span>
 				</div>
 
 				<div class="p-5 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-2">
 					<span class="text-xs text-neutral-400 font-medium">Container Health</span>
-					<div class="text-2xl font-bold text-emerald-400">Healthy (0 Restarts)</div>
+					<div class="text-2xl font-bold {metricsData.status === 'Healthy' ? 'text-emerald-400' : 'text-amber-400'}">
+						{metricsData.status} ({metricsData.runningContainers}/{metricsData.totalContainers} Online)
+					</div>
+					<span class="text-[11px] text-neutral-500 block">Active container status</span>
 				</div>
 			</div>
 		{/if}

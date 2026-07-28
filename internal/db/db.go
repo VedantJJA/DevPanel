@@ -70,6 +70,8 @@ func (d *DB) migrate() error {
 		migrationContainers,
 		migrationDomains,
 		migrationBlueprints,
+		migrationServices,
+		migrationDeployments,
 	}
 
 	for i, m := range migrations {
@@ -139,6 +141,41 @@ CREATE TABLE IF NOT EXISTS blueprints (
 );
 
 CREATE INDEX IF NOT EXISTS idx_blueprints_repo ON blueprints(repo_url);
+`
+
+const migrationServices = `
+CREATE TABLE IF NOT EXISTS services (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id     TEXT    NOT NULL,
+    name           TEXT    NOT NULL,
+    type           TEXT    NOT NULL DEFAULT 'web',
+    env_json       TEXT    NOT NULL DEFAULT '{}',
+    port           INTEGER NOT NULL DEFAULT 0,
+    custom_domain  TEXT    NOT NULL DEFAULT '',
+    auto_deploy    INTEGER NOT NULL DEFAULT 0,
+    build_command  TEXT    NOT NULL DEFAULT '',
+    start_command  TEXT    NOT NULL DEFAULT '',
+    instance_type  TEXT    NOT NULL DEFAULT 'free',
+    created_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_services_project ON services(project_id);
+`
+
+const migrationDeployments = `
+CREATE TABLE IF NOT EXISTS deployments (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT    NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'queued',
+    commit_sha  TEXT    NOT NULL DEFAULT '',
+    trigger     TEXT    NOT NULL DEFAULT 'manual',
+    started_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    finished_at TEXT    NOT NULL DEFAULT '',
+    error       TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id);
+CREATE INDEX IF NOT EXISTS idx_deployments_status  ON deployments(status);
 `
 
 // --- Shared helpers ---------------------------------------------------------

@@ -2,8 +2,10 @@ package docker
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -269,7 +271,27 @@ func (o *BlueprintOrchestrator) buildImageViaAPI(ctx context.Context, tarBuf *by
 		return fmt.Errorf("docker api build failed (HTTP %d): %s", resp.StatusCode, body)
 	}
 
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// Stream build output line by line
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var buildMsg struct {
+			Stream string `json:"stream"`
+			Error  string `json:"error"`
+		}
+		if json.Unmarshal(line, &buildMsg) == nil {
+			if buildMsg.Stream != "" {
+				msg := strings.TrimSpace(buildMsg.Stream)
+				if msg != "" {
+					log.Printf("blueprint-build [%s]: %s", imageName, msg)
+				}
+			}
+			if buildMsg.Error != "" {
+				return fmt.Errorf("docker build error: %s", buildMsg.Error)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -278,7 +300,62 @@ func (o *BlueprintOrchestrator) deployContainer(ctx context.Context, project str
 	containerName := fmt.Sprintf("devpnl-%s-%s", project, serviceName)
 
 	log.Printf("blueprint: deploying container %s (image: %s, port: %d)", containerName, imageName, cfg.Deploy.Port)
-	return containerName, nil
+
+	// Remove existing container if present
+	_ = o.Client.RemoveContainer(ctx, containerName, true)
+
+	// Format exposed port
+	port := cfg.Deploy.Port
+	if port <= 0 {
+		if cfg.Type == "static" {
+			port = 80
+		} else if cfg.Type == "database" {
+			port = 5432
+		} else {
+			port = 8080
+		}
+	}
+
+	portKey := fmt.Sprintf("%d/tcp", port)
+	exposedPorts := map[string]struct{}{
+		portKey: {},
+	}
+
+	// Environment variables
+	var envList []string
+	for k, v := range cfg.Deploy.Env {
+		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Command
+	var cmdList []string
+	if cfg.Deploy.Command != "" {
+		cmdList = strings.Fields(cfg.Deploy.Command)
+	}
+
+	config := ContainerCreateConfig{
+		Image:        imageName,
+		Env:          envList,
+		Cmd:          cmdList,
+		ExposedPorts: exposedPorts,
+		HostConfig: HostConfig{
+			PortBindings: map[string][]PortBinding{
+				portKey: {{HostPort: ""}}, // Auto-assign free host port
+			},
+		},
+	}
+
+	containerID, err := o.Client.CreateContainer(ctx, containerName, config)
+	if err != nil {
+		return "", fmt.Errorf("create container %s: %w", containerName, err)
+	}
+
+	if err := o.Client.StartContainer(ctx, containerID); err != nil {
+		return "", fmt.Errorf("start container %s (%s): %w", containerName, containerID, err)
+	}
+
+	log.Printf("blueprint: container %s (%s) deployed and started successfully", containerName, containerID)
+	return containerID, nil
 }
 
 // pullImage pulls a pre-built image using Docker Engine API.

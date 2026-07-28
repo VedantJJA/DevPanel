@@ -253,6 +253,64 @@ func (c *Client) RemoveContainer(ctx context.Context, containerID string, force 
 	return nil
 }
 
+// ContainerCreateConfig represents the request JSON payload for creating a container via Docker API.
+type ContainerCreateConfig struct {
+	Image        string              `json:"Image"`
+	Env          []string            `json:"Env,omitempty"`
+	Cmd          []string            `json:"Cmd,omitempty"`
+	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
+	HostConfig   HostConfig          `json:"HostConfig,omitempty"`
+}
+
+type HostConfig struct {
+	PortBindings map[string][]PortBinding `json:"PortBindings,omitempty"`
+	Binds        []string                 `json:"Binds,omitempty"`
+	AutoRemove   bool                     `json:"AutoRemove,omitempty"`
+}
+
+type PortBinding struct {
+	HostIP   string `json:"HostIp,omitempty"`
+	HostPort string `json:"HostPort,omitempty"`
+}
+
+type ContainerCreateResponse struct {
+	ID       string   `json:"Id"`
+	Warnings []string `json:"Warnings"`
+}
+
+// CreateContainer sends POST /containers/create?name=xxx to Docker daemon.
+func (c *Client) CreateContainer(ctx context.Context, name string, config ContainerCreateConfig) (string, error) {
+	url := apiURL(fmt.Sprintf("/containers/create?name=%s", name))
+	bodyBytes, err := json.Marshal(config)
+	if err != nil {
+		return "", fmt.Errorf("marshal container config: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("docker create container %s: %w", name, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("docker create container %s HTTP %d: %s", name, resp.StatusCode, b)
+	}
+
+	var res ContainerCreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return "", fmt.Errorf("decode create response: %w", err)
+	}
+
+	return res.ID, nil
+}
+
 // RemoveVolume deletes a volume by name. If force is true, removes even if in use.
 func (c *Client) RemoveVolume(ctx context.Context, volumeName string, force bool) error {
 	url := apiURL(fmt.Sprintf("/volumes/%s?force=%t", volumeName, force))
