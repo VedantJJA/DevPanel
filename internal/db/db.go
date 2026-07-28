@@ -69,6 +69,7 @@ func (d *DB) migrate() error {
 		migrationProjects,
 		migrationContainers,
 		migrationDomains,
+		migrationBlueprints,
 	}
 
 	for i, m := range migrations {
@@ -125,6 +126,19 @@ CREATE TABLE IF NOT EXISTS domains (
 
 CREATE INDEX IF NOT EXISTS idx_domains_fqdn    ON domains(fqdn);
 CREATE INDEX IF NOT EXISTS idx_domains_project ON domains(project_id);
+`
+
+const migrationBlueprints = `
+CREATE TABLE IF NOT EXISTS blueprints (
+	id            TEXT PRIMARY KEY,
+	name          TEXT NOT NULL,
+	repo_url      TEXT NOT NULL UNIQUE,
+	status        TEXT NOT NULL DEFAULT 'valid',
+	service_count INTEGER NOT NULL DEFAULT 1,
+	created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_blueprints_repo ON blueprints(repo_url);
 `
 
 // --- Shared helpers ---------------------------------------------------------

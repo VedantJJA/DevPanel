@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import type { Container, Volume, SystemStats, DeleteTarget, ErrorModalState, LogStreamState, TabType } from '$lib/types';
+	import type { Container, Volume, SystemStats, BlueprintItem, DeleteTarget, ErrorModalState, LogStreamState, TabType } from '$lib/types';
 	
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Header from '$lib/components/Header.svelte';
@@ -8,6 +8,7 @@
 	import OverviewTab from '$lib/components/tabs/OverviewTab.svelte';
 	import ContainersTab from '$lib/components/tabs/ContainersTab.svelte';
 	import VolumesTab from '$lib/components/tabs/VolumesTab.svelte';
+	import BlueprintsTab from '$lib/components/tabs/BlueprintsTab.svelte';
 	import SettingsTab from '$lib/components/tabs/SettingsTab.svelte';
 	import ConfirmDeleteModal from '$lib/components/modals/ConfirmDeleteModal.svelte';
 	import ErrorAlertModal from '$lib/components/modals/ErrorAlertModal.svelte';
@@ -23,6 +24,7 @@
 
 	let containers = $state<Container[]>([]);
 	let volumes = $state<Volume[]>([]);
+	let blueprints = $state<BlueprintItem[]>([]);
 	let systemStats = $state<SystemStats>({
 		totalContainers: 0,
 		activeContainers: 0,
@@ -61,10 +63,11 @@
 		loading = true;
 		errorMessage = null;
 		try {
-			const [containersRes, statsRes, volumesRes] = await Promise.all([
+			const [containersRes, statsRes, volumesRes, blueprintsRes] = await Promise.all([
 				fetch('/api/containers'),
 				fetch('/api/system/stats'),
-				fetch('/api/volumes')
+				fetch('/api/volumes'),
+				fetch('/api/blueprints')
 			]);
 
 			if (containersRes.ok) {
@@ -91,6 +94,11 @@
 			if (volumesRes.ok) {
 				const vData = await volumesRes.json();
 				volumes = vData.volumes || [];
+			}
+
+			if (blueprintsRes.ok) {
+				const bpData = await blueprintsRes.json();
+				blueprints = bpData.blueprints || [];
 			}
 		} catch (err: any) {
 			console.error('Error fetching live telemetry:', err.message);
@@ -160,6 +168,36 @@
 		forceDelete = false;
 	}
 
+	function promptDeleteBlueprint(bp: BlueprintItem) {
+		deleteTarget = {
+			type: 'blueprint',
+			idOrName: bp.id,
+			label: bp.name
+		};
+		forceDelete = false;
+	}
+
+	async function handleDeployBlueprint(bp: BlueprintItem) {
+		actionLoading = bp.id;
+		try {
+			const res = await fetch('/api/blueprints/deploy', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ repo_url: bp.repo_url, app_name: bp.name })
+			});
+			const data = await res.json();
+			if (!res.ok || data.error) {
+				openErrorPopup('Deployment Error', data.error || 'Failed to deploy application blueprint.', data.details);
+			} else {
+				await fetchData();
+			}
+		} catch (err: any) {
+			openErrorPopup('Network Request Error', `Failed to send deployment command: ${err.message}`);
+		} finally {
+			actionLoading = null;
+		}
+	}
+
 	async function confirmDelete() {
 		if (!deleteTarget) return;
 		const target = deleteTarget;
@@ -180,6 +218,14 @@
 				const data = await res.json();
 				if (!res.ok || data.error) {
 					openErrorPopup('Volume Deletion Error', data.error || 'Failed to remove volume.', data.details);
+				} else {
+					await fetchData();
+				}
+			} else if (target.type === 'blueprint') {
+				const res = await fetch(`/api/blueprints/delete?id=${encodeURIComponent(target.idOrName)}`, { method: 'DELETE' });
+				const data = await res.json();
+				if (!res.ok || data.error) {
+					openErrorPopup('Blueprint Deletion Error', data.error || 'Failed to remove blueprint.');
 				} else {
 					await fetchData();
 				}
@@ -353,6 +399,14 @@
 					{volumes}
 					{loading}
 					onPromptDelete={promptDeleteVolume}
+				/>
+			{:else if activeTab === 'blueprints'}
+				<BlueprintsTab
+					{blueprints}
+					{loading}
+					{actionLoading}
+					onDeployBlueprint={handleDeployBlueprint}
+					onPromptDeleteBlueprint={promptDeleteBlueprint}
 				/>
 			{:else if activeTab === 'settings'}
 				<SettingsTab

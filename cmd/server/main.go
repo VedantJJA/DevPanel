@@ -153,6 +153,10 @@ func main() {
 	mux.HandleFunc("/api/containers/stop", docker.HandleStopContainer(dockClient))
 	mux.HandleFunc("/api/containers/delete", docker.HandleDeleteContainer(dockClient, database))
 	mux.HandleFunc("/api/volumes/delete", docker.HandleDeleteVolume(dockClient))
+	mux.HandleFunc("/api/blueprints", docker.HandleListBlueprints(database))
+	mux.HandleFunc("/api/blueprints/delete", docker.HandleDeleteBlueprint(database))
+	mux.HandleFunc("/api/blueprints/deploy", docker.HandleDeployBlueprint(dockClient))
+	mux.HandleFunc("/api/blueprints/validate", docker.HandleValidateBlueprint(database))
 
 	// WebSocket endpoints for real-time telemetry
 	mux.HandleFunc("/ws/stats", docker.HandleStatsWS(dockClient))

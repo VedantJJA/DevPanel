@@ -30,8 +30,17 @@ export interface SystemStats {
 	arch?: string;
 }
 
+export interface BlueprintItem {
+	id: string;
+	name: string;
+	repo_url: string;
+	status: 'active' | 'deploying' | 'valid' | 'error';
+	serviceCount: number;
+	createdAt: string;
+}
+
 export interface DeleteTarget {
-	type: 'container' | 'volume';
+	type: 'container' | 'volume' | 'blueprint';
 	idOrName: string;
 	label: string;
 }
@@ -48,4 +57,4 @@ export interface LogStreamState {
 	logs: string[];
 }
 
-export type TabType = 'overview' | 'containers' | 'volumes' | 'settings';
+export type TabType = 'overview' | 'containers' | 'volumes' | 'blueprints' | 'settings';

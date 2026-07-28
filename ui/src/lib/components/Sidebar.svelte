@@ -65,6 +65,16 @@
 			</button>
 
 			<button
+				onclick={() => onTabSelect('blueprints')}
+				class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all {activeTab === 'blueprints'
+					? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-sm'
+					: 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/50'}"
+			>
+				<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+				Blueprints
+			</button>
+
+			<button
 				onclick={() => onTabSelect('settings')}
 				class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all {activeTab === 'settings'
 					? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-sm'
