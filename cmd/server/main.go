@@ -158,6 +158,9 @@ func main() {
 	mux.HandleFunc("/api/blueprints/deploy", docker.HandleDeployBlueprint(dockClient))
 	mux.HandleFunc("/api/blueprints/validate", docker.HandleValidateBlueprint(database))
 
+	// Path-based application hosting route: http://140.245.116.79/app/<project-name>/
+	mux.HandleFunc("/app/", docker.HandleAppProxy(dockClient))
+
 	// WebSocket endpoints for real-time telemetry
 	mux.HandleFunc("/ws/stats", docker.HandleStatsWS(dockClient))
 	mux.HandleFunc("/ws/logs", docker.HandleLogsWS(dockClient))

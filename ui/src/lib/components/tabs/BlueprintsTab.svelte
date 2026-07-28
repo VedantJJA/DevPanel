@@ -71,6 +71,13 @@
 					<p class="text-xs text-neutral-400 font-mono truncate" title={bp.repo_url}>
 						{bp.repo_url}
 					</p>
+					<a
+						href="/app/{bp.name}"
+						target="_blank"
+						class="text-xs text-emerald-400 hover:underline font-mono inline-flex items-center gap-1 mt-1"
+					>
+						Hosted URL: /app/{bp.name} ↗
+					</a>
 				</div>
 
 				<div class="pt-4 border-t border-neutral-800/80 flex items-center justify-between gap-3">
