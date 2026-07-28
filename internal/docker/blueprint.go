@@ -122,15 +122,29 @@ func (b *Blueprint) Validate() error {
 	return nil
 }
 
+// LogSink is called for every line of build/deploy output. It matches the broadcaster signature.
+type LogSink func(projectID, stage, service, message, level string)
+
 // BlueprintOrchestrator handles cloning monorepos, building services, and deploying containers.
 type BlueprintOrchestrator struct {
-	Client *Client
+	Client    *Client
+	ProjectID string
+	Sink      LogSink
 }
 
 // NewBlueprintOrchestrator creates a new orchestrator instance.
 func NewBlueprintOrchestrator(client *Client) *BlueprintOrchestrator {
 	return &BlueprintOrchestrator{
 		Client: client,
+		Sink:   func(p, st, sv, msg, lvl string) {},
+	}
+}
+
+// log emits a build/deploy line to both stdout and the SSE broadcaster.
+func (o *BlueprintOrchestrator) log(stage, service, msg, level string) {
+	log.Printf("blueprint[%s/%s]: %s", stage, service, msg)
+	if o.Sink != nil && o.ProjectID != "" {
+		o.Sink(o.ProjectID, stage, service, msg, level)
 	}
 }
 

@@ -160,6 +160,17 @@ func main() {
 	mux.HandleFunc("/api/deployments/trigger", docker.HandleTriggerDeployment(database, dockClient))
 	mux.HandleFunc("/api/deployments/", docker.HandleDeploymentLogsSSE())
 
+	// New Render-style Project & Scan Endpoints
+	mux.HandleFunc("POST /api/repos/scan", docker.HandleScanRepo())
+	mux.HandleFunc("POST /api/projects", docker.HandleCreateProject(database))
+	mux.HandleFunc("GET /api/projects", docker.HandleListProjects(database))
+	mux.HandleFunc("GET /api/projects/{id}", docker.HandleGetProject(database))
+	mux.HandleFunc("PATCH /api/projects/{id}/services/{name}", docker.HandleUpdateService(database))
+	mux.HandleFunc("POST /api/projects/{id}/deploy", docker.HandleTriggerProjectDeploy(database, dockClient))
+	mux.HandleFunc("GET /api/projects/{id}/deployments", docker.HandleListDeployments(database))
+	mux.HandleFunc("GET /api/projects/{id}/logs", docker.HandleProjectLogsSSE())
+	mux.HandleFunc("POST /api/projects/{id}/services/{name}/restart", docker.HandleRestartService(database, dockClient))
+
 	// Path-based application hosting route: http://140.245.116.79/app/<project-name>/
 	mux.HandleFunc("/app/", docker.HandleAppProxy(dockClient))
 

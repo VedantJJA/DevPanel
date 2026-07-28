@@ -20,11 +20,11 @@
 		</div>
 
 		<a
-			href="/blueprints/new"
+			href="/new"
 			class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center gap-2 transition-all shadow-md shadow-emerald-950/60"
 		>
 			<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-			+ Add Blueprint App
+			+ New Deployment Wizard
 		</a>
 	</div>
 

@@ -34,9 +34,84 @@ export interface BlueprintItem {
 	id: string;
 	name: string;
 	repo_url: string;
-	status: 'active' | 'deploying' | 'valid' | 'error';
+	status: 'active' | 'deploying' | 'valid' | 'error' | 'ready';
 	serviceCount: number;
-	createdAt: string;
+	createdAt?: string;
+}
+
+export interface ServiceRecord {
+	id?: number;
+	project_id: string;
+	name: string;
+	type: 'web' | 'static' | 'database' | 'worker';
+	env_vars: Record<string, string>;
+	port: number;
+	custom_domain: string;
+	auto_deploy: boolean;
+	build_command: string;
+	start_command: string;
+	instance_type: string;
+	created_at?: string;
+	updated_at?: string;
+}
+
+export interface DeploymentRecord {
+	id: string;
+	project_id: string;
+	status: 'queued' | 'building' | 'live' | 'error' | 'canceled';
+	commit_sha: string;
+	trigger: 'manual' | 'auto' | 'rollback';
+	started_at: string;
+	finished_at: string;
+	error: string;
+}
+
+export interface ScanService {
+	name: string;
+	type: 'web' | 'static' | 'database' | 'worker';
+	image?: string;
+	source?: {
+		repo?: string;
+		directory?: string;
+		ref?: string;
+	};
+	build?: {
+		engine?: string;
+		command?: string;
+		dockerfile_path?: string;
+	};
+	deploy?: {
+		port?: number;
+		command?: string;
+		env?: Record<string, string>;
+	};
+	defaults: {
+		env: Record<string, string>;
+		port: number;
+	};
+}
+
+export interface ScanResult {
+	project: string;
+	repo_url: string;
+	services: ScanService[];
+	warnings: string[];
+	errors: string[];
+	blueprint?: any;
+}
+
+export interface LogEvent {
+	timestamp: string;
+	stage: 'clone' | 'build' | 'deploy' | 'runtime' | 'system';
+	service: string;
+	message: string;
+	level: 'info' | 'warn' | 'error' | 'success';
+}
+
+export interface ProjectDetail {
+	blueprint: BlueprintItem;
+	services: ServiceRecord[];
+	latest?: DeploymentRecord;
 }
 
 export interface DeleteTarget {
