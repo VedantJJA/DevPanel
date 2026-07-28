@@ -291,7 +291,7 @@
 					<span>{projectId}</span>
 					<span class="text-xs px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-sans font-medium">Deployed & Running</span>
 				</h1>
-				<p class="text-xs text-neutral-400 font-mono mt-1">Hosted URL: <a href="/app/{projectId}" target="_blank" class="text-emerald-400 hover:underline">http://140.245.116.79/app/{projectId} ↗</a></p>
+				<p class="text-xs text-neutral-400 font-mono mt-1">Hosted URL: <a href="/app/{projectId}" target="_blank" class="text-emerald-400 hover:underline">{typeof window !== 'undefined' ? window.location.origin : ''}/app/{projectId} ↗</a></p>
 			</div>
 
 			<div class="flex items-center gap-3">

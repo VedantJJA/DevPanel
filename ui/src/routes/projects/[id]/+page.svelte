@@ -162,7 +162,7 @@
 							</span>
 						</div>
 						<p class="text-xs text-neutral-400 font-mono mt-1">
-							Hosted URL: <a href="/app/{projectData.blueprint.name.toLowerCase()}" target="_blank" class="text-emerald-400 hover:underline">http://140.245.116.79/app/{projectData.blueprint.name.toLowerCase()} ↗</a>
+							Hosted URL: <a href="/app/{projectData.blueprint.name.toLowerCase()}" target="_blank" class="text-emerald-400 hover:underline">{typeof window !== 'undefined' ? window.location.origin : ''}/app/{projectData.blueprint.name.toLowerCase()} ↗</a>
 						</p>
 					</div>
 

@@ -33,11 +33,16 @@ export interface SystemStats {
 export interface BlueprintItem {
 	id: string;
 	name: string;
-	repo_url: string;
-	status: 'active' | 'deploying' | 'valid' | 'error' | 'ready';
-	serviceCount: number;
+	project?: string;
+	version?: string;
+	repo_url?: string;
+	status?: 'active' | 'deploying' | 'valid' | 'error' | 'ready' | string;
+	serviceCount?: number;
 	createdAt?: string;
+	services?: Record<string, any>;
 }
+
+export type Blueprint = BlueprintItem;
 
 export interface ServiceRecord {
 	id?: number;

@@ -6,6 +6,9 @@
 	// Dynamic blueprint state passed from validation or sessionStorage
 	let repoUrl = $state('https://github.com/username/my-monorepo.git');
 	let blueprint = $state<Blueprint>({
+		id: 'bp-monorepo',
+		name: 'my-monorepo-startup',
+		repo_url: 'https://github.com/username/my-monorepo.git',
 		version: '1.0',
 		project: 'my-monorepo-startup',
 		services: {
@@ -102,7 +105,7 @@
 			}
 
 			// Redirect to Live Console page for real-time log streaming
-			const targetProjectID = data.project_id || blueprint.project.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+			const targetProjectID = data.project_id || (blueprint.project || 'project').toLowerCase().replace(/[^a-z0-9-]/g, '-');
 			goto(`/deployments/${targetProjectID}`);
 		} catch (err: any) {
 			errorMessage = err.message || 'An unexpected error occurred during deployment submission.';

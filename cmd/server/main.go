@@ -161,6 +161,7 @@ func main() {
 	mux.HandleFunc("/api/deployments/", docker.HandleDeploymentLogsSSE())
 
 	// New Render-style Project & Scan Endpoints
+	mux.HandleFunc("GET /api/repos/user", docker.HandleListUserRepos())
 	mux.HandleFunc("POST /api/repos/scan", docker.HandleScanRepo())
 	mux.HandleFunc("POST /api/projects", docker.HandleCreateProject(database))
 	mux.HandleFunc("GET /api/projects", docker.HandleListProjects(database))

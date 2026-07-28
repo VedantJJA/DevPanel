@@ -45,8 +45,9 @@ type SourceConfig struct {
 // BuildConfig configures how the service image is constructed.
 type BuildConfig struct {
 	Engine         string            `yaml:"engine"`          // "dockerfile", "node", "go", "static"
-	DockerfileCtx  string            `yaml:"context"`          // Build context path relative to sub-directory
 	DockerfilePath string            `yaml:"dockerfile_path"` // Path to Dockerfile (e.g. "Dockerfile")
+	Command        string            `yaml:"command"`         // Build command (e.g. "npm run build")
+	OutputDir      string            `yaml:"output_dir"`      // Output directory for static site build (e.g. "dist")
 	Args           map[string]string `yaml:"args"`            // Docker build arguments
 }
 
@@ -242,7 +243,7 @@ func (o *BlueprintOrchestrator) buildServiceImage(ctx context.Context, serviceNa
 	if _, err := os.Stat(fullDockerfilePath); os.IsNotExist(err) {
 		if cfg.Build.Engine == "static" || cfg.Type == "static" {
 			log.Printf("blueprint: generating static Nginx Dockerfile for %s", serviceName)
-			if err := generateStaticDockerfile(fullDockerfilePath); err != nil {
+			if err := generateStaticDockerfile(fullDockerfilePath, cfg.Build.OutputDir, cfg.Build.Command); err != nil {
 				return fmt.Errorf("generate static dockerfile: %w", err)
 			}
 		} else if cfg.Build.Engine == "node" {
@@ -465,13 +466,26 @@ func createTarArchive(srcDir string) (*bytes.Buffer, error) {
 	return buf, nil
 }
 
-// generateStaticDockerfile writes a production-ready Nginx Dockerfile for static sites.
-func generateStaticDockerfile(destPath string) error {
-	content := `FROM nginx:alpine
-COPY . /usr/share/nginx/html
+// generateStaticDockerfile writes a production-ready multi-stage Nginx Dockerfile for static sites.
+func generateStaticDockerfile(destPath string, outputDir string, buildCmd string) error {
+	if outputDir == "" {
+		outputDir = "dist"
+	}
+	if buildCmd == "" {
+		buildCmd = "npm run build"
+	}
+	content := fmt.Sprintf(`FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci || npm install
+COPY . .
+RUN %s
+
+FROM nginx:alpine
+COPY --from=builder /app/%s /usr/share/nginx/html
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
-`
+`, buildCmd, outputDir)
 	return os.WriteFile(destPath, []byte(content), 0644)
 }
 

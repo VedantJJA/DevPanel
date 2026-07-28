@@ -90,11 +90,18 @@ func getPlatformCPULoad(numCPUs int) float64 {
 		return 0.0
 	}
 
-	activeDelta := totalDelta - idlDelta
-	// Multiplied by numCPUs so 2 cores at 100% = 200%!
-	cpuPct := (float64(activeDelta) / float64(totalDelta)) * 100.0 * float64(numCPUs)
+	activeDelta := 0.0
+	if totalDelta > idlDelta {
+		activeDelta = float64(totalDelta - idlDelta)
+	}
+
+	// Calculate system-wide active CPU load normalized between 0 and 100%
+	cpuPct := (activeDelta / float64(totalDelta)) * 100.0
 	if cpuPct < 0 {
 		cpuPct = 0
+	}
+	if cpuPct > 100 {
+		cpuPct = 100
 	}
 	return MathRound(cpuPct, 1)
 }

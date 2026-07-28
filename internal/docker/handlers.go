@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/VedantJJA/devpnl/internal/db"
 )
@@ -318,6 +319,86 @@ func HandlePruneSystem(dockClient *Client) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "System pruned successfully"})
+	}
+}
+
+// HandleListUserRepos fetches public GitHub repositories for a given username.
+func HandleListUserRepos() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		username := strings.TrimSpace(r.URL.Query().Get("username"))
+		if username == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": "username query parameter is required"})
+			return
+		}
+
+		reqURL := fmt.Sprintf("https://api.github.com/users/%s/repos?sort=updated&per_page=30", username)
+		req, err := http.NewRequestWithContext(r.Context(), "GET", reqURL, nil)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": err.Error()})
+			return
+		}
+		req.Header.Set("User-Agent", "DevPnl-App")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("api: fetch github repos for %s error: %v", username, err)
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": fmt.Sprintf("Failed to fetch GitHub repositories for %s", username)})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			w.WriteHeader(resp.StatusCode)
+			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": fmt.Sprintf("GitHub API returned status %d for user %s", resp.StatusCode, username)})
+			return
+		}
+
+		var ghRepos []struct {
+			ID          int    `json:"id"`
+			Name        string `json:"name"`
+			FullName    string `json:"full_name"`
+			HTMLURL     string `json:"html_url"`
+			Private     bool   `json:"private"`
+			UpdatedAt   string `json:"updated_at"`
+			Description string `json:"description"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&ghRepos); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": err.Error()})
+			return
+		}
+
+		type RepoDTO struct {
+			ID       int    `json:"id"`
+			Name     string `json:"name"`
+			FullName string `json:"full_name"`
+			URL      string `json:"url"`
+			Private  bool   `json:"private"`
+			Updated  string `json:"updated"`
+		}
+
+		var dtoList []RepoDTO
+		for _, repo := range ghRepos {
+			updatedStr := repo.UpdatedAt
+			if len(updatedStr) >= 10 {
+				updatedStr = updatedStr[:10]
+			}
+			dtoList = append(dtoList, RepoDTO{
+				ID:       repo.ID,
+				Name:     repo.Name,
+				FullName: repo.FullName,
+				URL:      repo.HTMLURL,
+				Private:  repo.Private,
+				Updated:  updatedStr,
+			})
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{"repos": dtoList})
 	}
 }
 
