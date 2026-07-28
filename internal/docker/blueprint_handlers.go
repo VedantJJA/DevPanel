@@ -118,7 +118,7 @@ func HandleDeployBlueprint(dockClient *Client) http.HandlerFunc {
 			},
 		}
 
-		res, err := orchestrator.DeployOrchestrate(r.Context(), bp)
+		res, err := orchestrator.DeployOrchestrate(r.Context(), bp, req.RepoURL)
 		if err != nil {
 			log.Printf("api: deploy blueprint error: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)

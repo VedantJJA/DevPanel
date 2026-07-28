@@ -111,9 +111,7 @@ func (b *Blueprint) Validate() error {
 				return fmt.Errorf("service %q: database type requires 'image' (e.g. postgres:15)", sName)
 			}
 		case "web", "static", "worker":
-			if sCfg.Image == "" && sCfg.Source.Repo == "" {
-				return fmt.Errorf("service %q: requires either 'image' or 'source.repo'", sName)
-			}
+			// source.repo is optional and defaults to the current indexing repository URL.
 		default:
 			return fmt.Errorf("service %q: unsupported service type %q", sName, sCfg.Type)
 		}
@@ -135,7 +133,7 @@ func NewBlueprintOrchestrator(client *Client) *BlueprintOrchestrator {
 }
 
 // DeployOrchestrate deploys all services defined in a blueprint, efficiently sharing monorepo git clones.
-func (o *BlueprintOrchestrator) DeployOrchestrate(ctx context.Context, bp *Blueprint) (*DeploymentResult, error) {
+func (o *BlueprintOrchestrator) DeployOrchestrate(ctx context.Context, bp *Blueprint, defaultRepoURL string) (*DeploymentResult, error) {
 	log.Printf("blueprint: starting deployment for project %q (%d services)", bp.Project, len(bp.Services))
 
 	// Create temporary workspace directory for repository caching
@@ -158,21 +156,27 @@ func (o *BlueprintOrchestrator) DeployOrchestrate(ctx context.Context, bp *Bluep
 
 		var targetDir string
 
-		// 1. Resolve Git Monorepo Source if specified
-		if sCfg.Source.Repo != "" {
-			clonedPath, exists := repoCache[sCfg.Source.Repo]
+		// Resolve Git repository URL (defaults to current project repository if empty, "current", "this", or "self")
+		repoURL := strings.TrimSpace(sCfg.Source.Repo)
+		if repoURL == "" || repoURL == "current" || repoURL == "this" || repoURL == "self" {
+			repoURL = defaultRepoURL
+		}
+
+		// 1. Resolve Git Monorepo Source if specified or when building from source
+		if repoURL != "" && sCfg.Image == "" {
+			clonedPath, exists := repoCache[repoURL]
 			if !exists {
 				clonedPath = filepath.Join(tempDir, sanitizeName(sName)+"-repo")
-				log.Printf("blueprint: cloning monorepo %s -> %s", sCfg.Source.Repo, clonedPath)
-				if err := cloneGitRepo(ctx, sCfg.Source.Repo, sCfg.Source.Ref, clonedPath); err != nil {
-					return nil, fmt.Errorf("blueprint: clone repo %s for service %s: %w", sCfg.Source.Repo, sName, err)
+				log.Printf("blueprint: cloning repository %s -> %s", repoURL, clonedPath)
+				if err := cloneGitRepo(ctx, repoURL, sCfg.Source.Ref, clonedPath); err != nil {
+					return nil, fmt.Errorf("blueprint: clone repo %s for service %s: %w", repoURL, sName, err)
 				}
-				repoCache[sCfg.Source.Repo] = clonedPath
+				repoCache[repoURL] = clonedPath
 			}
 
 			// Sub-directory inside monorepo
 			targetDir = clonedPath
-			if sCfg.Source.Directory != "" {
+			if sCfg.Source.Directory != "" && sCfg.Source.Directory != "." && sCfg.Source.Directory != "/" {
 				targetDir = filepath.Join(clonedPath, filepath.Clean(sCfg.Source.Directory))
 			}
 

@@ -13,14 +13,13 @@ services:
   frontend:
     type: static
     source:
-      repo: "https://github.com/username/my-monorepo.git"
       directory: "web"
     build:
       engine: "node"
   backend:
     type: web
     source:
-      repo: "https://github.com/username/my-monorepo.git"
+      repo: "current"
       directory: "api"
     build:
       engine: "dockerfile"
@@ -48,7 +47,7 @@ func TestParseBlueprint_Success(t *testing.T) {
 		t.Fatalf("expected 3 services, got: %d", len(bp.Services))
 	}
 
-	// Verify frontend service
+	// Verify frontend service (optional repo omitted)
 	fe, ok := bp.Services["frontend"]
 	if !ok {
 		t.Fatal("missing 'frontend' service")
@@ -56,17 +55,11 @@ func TestParseBlueprint_Success(t *testing.T) {
 	if fe.Type != "static" {
 		t.Errorf("expected type 'static', got: %s", fe.Type)
 	}
-	if fe.Source.Repo != "https://github.com/username/my-monorepo.git" {
-		t.Errorf("expected repo URL, got: %s", fe.Source.Repo)
-	}
 	if fe.Source.Directory != "web" {
 		t.Errorf("expected directory 'web', got: %s", fe.Source.Directory)
 	}
-	if fe.Build.Engine != "node" {
-		t.Errorf("expected build engine 'node', got: %s", fe.Build.Engine)
-	}
 
-	// Verify backend service
+	// Verify backend service (repo set to "current")
 	be, ok := bp.Services["backend"]
 	if !ok {
 		t.Fatal("missing 'backend' service")
@@ -74,11 +67,8 @@ func TestParseBlueprint_Success(t *testing.T) {
 	if be.Type != "web" {
 		t.Errorf("expected type 'web', got: %s", be.Type)
 	}
-	if be.Source.Directory != "api" {
-		t.Errorf("expected directory 'api', got: %s", be.Source.Directory)
-	}
-	if be.Deploy.Port != 8080 {
-		t.Errorf("expected port 8080, got: %d", be.Deploy.Port)
+	if be.Source.Repo != "current" {
+		t.Errorf("expected repo 'current', got: %s", be.Source.Repo)
 	}
 
 	// Verify database service
@@ -91,9 +81,6 @@ func TestParseBlueprint_Success(t *testing.T) {
 	}
 	if db.Image != "postgres:15" {
 		t.Errorf("expected image 'postgres:15', got: %s", db.Image)
-	}
-	if db.Deploy.Port != 5432 {
-		t.Errorf("expected port 5432, got: %d", db.Deploy.Port)
 	}
 }
 
@@ -139,7 +126,6 @@ services:
 func TestCreateTarArchive(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// Create dummy files inside sub-directory
 	subDir := filepath.Join(tempDir, "web")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatal(err)

@@ -1,14 +1,16 @@
 package docker
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/VedantJJA/devpnl/internal/db"
 	"github.com/go-git/go-git/v5"
@@ -65,44 +67,17 @@ func HandleValidateBlueprint(database *db.DB) http.HandlerFunc {
 			return
 		}
 
-		// 1. Create a secure temporary directory for cloning
-		tempDir, err := os.MkdirTemp("", "devpanel-val-*")
+		log.Printf("blueprint-val: fetching raw devpanel.yaml for %s without cloning entire repository", req.RepoURL)
+
+		// 1. Fetch ONLY the devpanel.yaml file content via raw HTTP APIs
+		yamlBytes, err := fetchRawBlueprintContent(r.Context(), req.RepoURL)
 		if err != nil {
-			log.Printf("blueprint-val: failed to create temp dir: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to initialize indexing workspace"})
-			return
-		}
+			log.Printf("blueprint-val: raw fetch failed for %s: %v. Attempting lightweight sparse fallback...", req.RepoURL, err)
 
-		// CRITICAL: Securely clean up the temporary directory regardless of outcome
-		defer func() {
-			if removeErr := os.RemoveAll(tempDir); removeErr != nil {
-				log.Printf("blueprint-val: cleanup temp dir %s error: %v", tempDir, removeErr)
-			}
-		}()
-
-		// 2. Perform a shallow clone (Depth 1) using go-git/v5
-		log.Printf("blueprint-val: shallow cloning %s into %s", req.RepoURL, tempDir)
-		_, err = git.PlainCloneContext(r.Context(), tempDir, false, &git.CloneOptions{
-			URL:          req.RepoURL,
-			Depth:        1,
-			SingleBranch: true,
-		})
-		if err != nil {
-			log.Printf("blueprint-val: git clone error for %s: %v", req.RepoURL, err)
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ErrorResponse{
-				Error: fmt.Sprintf("Failed to clone repository: %v. Please verify the URL and public repository access.", err),
-			})
-			return
-		}
-
-		// 3. Check for devpanel.yaml in the root of the repository
-		yamlPath := filepath.Join(tempDir, "devpanel.yaml")
-		if _, err := os.Stat(yamlPath); errors.Is(err, os.ErrNotExist) {
-			// Fallback check for devpanel.yml
-			yamlPath = filepath.Join(tempDir, "devpanel.yml")
-			if _, err := os.Stat(yamlPath); errors.Is(err, os.ErrNotExist) {
+			// Fallback: Perform a lightweight shallow clone into a temporary directory if raw API is unavailable
+			yamlBytes, err = fetchBlueprintViaShallowClone(r.Context(), req.RepoURL)
+			if err != nil {
+				log.Printf("blueprint-val: validation failed for %s: %v", req.RepoURL, err)
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(ErrorResponse{
 					Error: "Blueprint not found. Please ensure a devpanel.yaml file exists in the root of your repository.",
@@ -111,16 +86,7 @@ func HandleValidateBlueprint(database *db.DB) http.HandlerFunc {
 			}
 		}
 
-		// 4. Read devpanel.yaml file content
-		yamlBytes, err := os.ReadFile(yamlPath)
-		if err != nil {
-			log.Printf("blueprint-val: failed to read %s: %v", yamlPath, err)
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to read devpanel.yaml from repository"})
-			return
-		}
-
-		// 5. Parse and validate YAML schema
+		// 2. Parse and validate YAML schema
 		var bp Blueprint
 		if err := yaml.Unmarshal(yamlBytes, &bp); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -138,12 +104,11 @@ func HandleValidateBlueprint(database *db.DB) http.HandlerFunc {
 			return
 		}
 
-		// Override or sync project name if not specified
 		if bp.Project == "" {
 			bp.Project = req.AppName
 		}
 
-		// 6. Save blueprint dynamically into SQLite DB if available
+		// 3. Save blueprint record into SQLite DB if available
 		if database != nil {
 			rec := &db.BlueprintRecord{
 				ID:           fmt.Sprintf("bp-%s", sanitizeName(req.AppName)),
@@ -164,4 +129,82 @@ func HandleValidateBlueprint(database *db.DB) http.HandlerFunc {
 			Blueprint: &bp,
 		})
 	}
+}
+
+// fetchRawBlueprintContent fetches only devpanel.yaml via raw HTTP API without cloning the repository.
+func fetchRawBlueprintContent(ctx context.Context, repoURL string) ([]byte, error) {
+	// Format GitHub raw URLs
+	// e.g. https://github.com/username/repo -> https://raw.githubusercontent.com/username/repo/main/devpanel.yaml
+	trimmed := strings.TrimSuffix(repoURL, ".git")
+	trimmed = strings.TrimSuffix(trimmed, "/")
+
+	var candidateURLs []string
+
+	if strings.Contains(trimmed, "github.com/") {
+		parts := strings.Split(trimmed, "github.com/")
+		if len(parts) == 2 {
+			repoPath := parts[1]
+			candidateURLs = []string{
+				fmt.Sprintf("https://raw.githubusercontent.com/%s/main/devpanel.yaml", repoPath),
+				fmt.Sprintf("https://raw.githubusercontent.com/%s/main/devpanel.yml", repoPath),
+				fmt.Sprintf("https://raw.githubusercontent.com/%s/master/devpanel.yaml", repoPath),
+				fmt.Sprintf("https://raw.githubusercontent.com/%s/master/devpanel.yml", repoPath),
+			}
+		}
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+
+	for _, urlStr := range candidateURLs {
+		req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+		if err != nil {
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			data, err := io.ReadAll(resp.Body)
+			if err == nil && len(data) > 0 {
+				log.Printf("blueprint-val: successfully fetched raw file from %s (%d bytes)", urlStr, len(data))
+				return data, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("devpanel.yaml not found via raw HTTP API for %s", repoURL)
+}
+
+// fetchBlueprintViaShallowClone acts as a fallback for non-GitHub or private repositories.
+func fetchBlueprintViaShallowClone(ctx context.Context, repoURL string) ([]byte, error) {
+	tempDir, err := os.MkdirTemp("", "devpanel-val-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tempDir)
+
+	_, err = git.PlainCloneContext(ctx, tempDir, false, &git.CloneOptions{
+		URL:          repoURL,
+		Depth:        1,
+		SingleBranch: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	yamlPath := filepath.Join(tempDir, "devpanel.yaml")
+	if data, err := os.ReadFile(yamlPath); err == nil {
+		return data, nil
+	}
+
+	yamlPath = filepath.Join(tempDir, "devpanel.yml")
+	if data, err := os.ReadFile(yamlPath); err == nil {
+		return data, nil
+	}
+
+	return nil, fmt.Errorf("devpanel.yaml not found in repository root")
 }
