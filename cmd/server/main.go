@@ -157,6 +157,8 @@ func main() {
 	mux.HandleFunc("/api/blueprints/delete", docker.HandleDeleteBlueprint(database))
 	mux.HandleFunc("/api/blueprints/deploy", docker.HandleDeployBlueprint(dockClient))
 	mux.HandleFunc("/api/blueprints/validate", docker.HandleValidateBlueprint(database))
+	mux.HandleFunc("/api/deployments/trigger", docker.HandleTriggerDeployment(database, dockClient))
+	mux.HandleFunc("/api/deployments/", docker.HandleDeploymentLogsSSE())
 
 	// Path-based application hosting route: http://140.245.116.79/app/<project-name>/
 	mux.HandleFunc("/app/", docker.HandleAppProxy(dockClient))

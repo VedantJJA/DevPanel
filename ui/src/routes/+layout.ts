@@ -1,4 +1,3 @@
-// Enable SPA mode: prerender all pages at build time,
-// and use client-side routing for navigation.
-export const prerender = true;
+// Enable SPA mode: use client-side routing for dynamic parameterized routes
+export const prerender = false;
 export const ssr = false;

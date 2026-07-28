@@ -16,7 +16,7 @@ export default defineConfig({
 				assets: 'build',
 				fallback: '200.html',  // SPA fallback for client-side routing
 				precompress: false,
-				strict: true
+				strict: false
 			})
 		})
 	],
