@@ -6,9 +6,10 @@
 		projectId: string;
 		serviceFilter?: string;
 		title?: string;
+		sourceUrl?: string;
 	}
 
-	let { projectId, serviceFilter = '', title = 'Live Deployment & Build Logs' }: Props = $props();
+	let { projectId, serviceFilter = '', title = 'Live Deployment & Build Logs', sourceUrl = '' }: Props = $props();
 
 	let logs = $state<LogEvent[]>([]);
 	let sseConnected = $state(false);
@@ -21,12 +22,17 @@
 		}
 	}
 
-	function connectSSE() {
+	$effect(() => {
 		if (eventSource) eventSource.close();
+		logs = [];
+		sseConnected = false;
 
-		let sseUrl = `/api/projects/${encodeURIComponent(projectId)}/logs`;
-		if (serviceFilter) {
-			sseUrl += `?service=${encodeURIComponent(serviceFilter)}`;
+		let sseUrl = sourceUrl;
+		if (!sseUrl) {
+			sseUrl = `/api/projects/${encodeURIComponent(projectId)}/logs`;
+			if (serviceFilter) {
+				sseUrl += `?service=${encodeURIComponent(serviceFilter)}`;
+			}
 		}
 
 		eventSource = new EventSource(sseUrl);
@@ -62,14 +68,10 @@
 		eventSource.onerror = () => {
 			sseConnected = false;
 		};
-	}
 
-	onMount(() => {
-		connectSSE();
-	});
-
-	onDestroy(() => {
-		if (eventSource) eventSource.close();
+		return () => {
+			if (eventSource) eventSource.close();
+		};
 	});
 </script>
 

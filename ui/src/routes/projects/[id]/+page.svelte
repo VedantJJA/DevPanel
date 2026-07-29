@@ -11,6 +11,16 @@
 	let projectData = $state<ProjectDetail | null>(null);
 	let activeServiceIdx = $state(0);
 	let activeSubTab = $state<'logs' | 'environment' | 'settings' | 'metrics'>('logs');
+	let logType = $state<'build' | 'live' | '1h' | '24h'>('build');
+	let currentSvc = $derived(projectData?.services?.[activeServiceIdx]);
+	let sseUrl = $derived.by(() => {
+		if (logType === 'build') return `/api/projects/${projectId}/logs`;
+		if (!currentSvc) return '';
+		if (logType === 'live') return `/api/projects/${projectId}/services/${currentSvc.name}/logs`;
+		if (logType === '1h') return `/api/projects/${projectId}/services/${currentSvc.name}/logs?since=1h`;
+		if (logType === '24h') return `/api/projects/${projectId}/services/${currentSvc.name}/logs?since=24h`;
+		return '';
+	});
 
 	let isSaving = $state(false);
 	let saveMessage = $state<string | null>(null);
@@ -223,8 +233,27 @@
 
 			<!-- Tab Content Areas -->
 			{#if activeSubTab === 'logs'}
-				<div class="h-[550px]">
-					<Terminal {projectId} serviceFilter={currentSvc?.name} title={`Live Terminal Stream for ${currentSvc?.name}`} />
+				<div class="h-[550px] flex flex-col gap-4">
+					<div class="flex items-center justify-between">
+						<div>
+							<h3 class="text-lg font-semibold text-gray-900">Live Logs & History</h3>
+							<p class="text-sm text-gray-500 mt-1">View build progress and real-time container logs.</p>
+						</div>
+						<select
+							bind:value={logType}
+							class="bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 shadow-sm"
+						>
+							<option value="build">Deployment Build Logs</option>
+							<option value="live">Live Container Output</option>
+							<option value="1h">Last 1 Hour Container Logs</option>
+							<option value="24h">Last 24 Hours Container Logs</option>
+						</select>
+					</div>
+					<div class="flex-1 min-h-0">
+						{#key logType}
+							<Terminal {projectId} sourceUrl={sseUrl} title={`Log Stream: ${logType === 'build' ? 'Deployment Build' : currentSvc?.name}`} />
+						{/key}
+					</div>
 				</div>
 			{:else if activeSubTab === 'environment'}
 				<div class="bg-white border border-gray-200 rounded-xl p-6 shadow-sm space-y-6">

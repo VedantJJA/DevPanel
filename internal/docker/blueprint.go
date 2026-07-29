@@ -368,6 +368,9 @@ func (o *BlueprintOrchestrator) deployContainer(ctx context.Context, project str
 		Env:          envList,
 		Cmd:          cmdList,
 		ExposedPorts: exposedPorts,
+		Labels: map[string]string{
+			"devpanel.service.type": cfg.Type,
+		},
 		HostConfig: HostConfig{
 			PortBindings: map[string][]PortBinding{
 				portKey: {{HostPort: ""}}, // Auto-assign free host port

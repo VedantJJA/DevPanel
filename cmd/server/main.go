@@ -181,6 +181,8 @@ func main() {
 	apiMux.HandleFunc("GET /api/projects/{id}/deployments", docker.HandleListDeployments(database))
 	apiMux.HandleFunc("GET /api/projects/{id}/logs", docker.HandleProjectLogsSSE())
 	apiMux.HandleFunc("POST /api/projects/{id}/services/{name}/restart", docker.HandleRestartService(database, dockClient))
+	apiMux.HandleFunc("GET /api/projects/{id}/services/{name}/logs", docker.HandleServiceLogsSSE(dockClient))
+	apiMux.HandleFunc("GET /api/projects/{id}/logs/history", docker.HandleProjectLogsHistory())
 	apiMux.HandleFunc("/api/settings", docker.HandleSettings(database))
 
 	// Mount protected API multiplexer under /api/ with middleware

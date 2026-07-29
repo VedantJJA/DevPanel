@@ -1,11 +1,14 @@
 package docker
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -41,14 +44,23 @@ type LogBroadcaster struct {
 	mu          sync.RWMutex
 	subscribers map[string][]chan LogEvent
 	history     map[string][]LogEvent
+	historyLoaded map[string]bool
 }
 
 var globalLogBroadcaster = &LogBroadcaster{
 	subscribers: make(map[string][]chan LogEvent),
 	history:     make(map[string][]LogEvent),
+	historyLoaded: make(map[string]bool),
 }
 
-// Broadcast sends a log event to all connected SSE clients for a project.
+// getLogFilePath returns the path to the persistent log file for a project.
+func getLogFilePath(projectID string) string {
+	logDir := filepath.Join("data", "logs")
+	_ = os.MkdirAll(logDir, 0755)
+	return filepath.Join(logDir, fmt.Sprintf("%s_build.jsonl", projectID))
+}
+
+// Broadcast sends a log event to all connected SSE clients for a project and persists it.
 func (b *LogBroadcaster) Broadcast(projectID string, stage, service, message, level string) {
 	evt := LogEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -63,6 +75,18 @@ func (b *LogBroadcaster) Broadcast(projectID string, stage, service, message, le
 	subs := append([]chan LogEvent(nil), b.subscribers[projectID]...)
 	b.mu.Unlock()
 
+	// Persist to file
+	go func() {
+		logPath := getLogFilePath(projectID)
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			defer f.Close()
+			data, _ := json.Marshal(evt)
+			f.Write(data)
+			f.WriteString("\n")
+		}
+	}()
+
 	for _, ch := range subs {
 		select {
 		case ch <- evt:
@@ -72,8 +96,36 @@ func (b *LogBroadcaster) Broadcast(projectID string, stage, service, message, le
 	}
 }
 
+// loadHistory reads the persisted build logs for a project if not already loaded.
+func (b *LogBroadcaster) loadHistory(projectID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.historyLoaded[projectID] {
+		return
+	}
+
+	logPath := getLogFilePath(projectID)
+	f, err := os.Open(logPath)
+	if err == nil {
+		defer f.Close()
+		scanner := bufio.NewScanner(f)
+		var history []LogEvent
+		for scanner.Scan() {
+			var evt LogEvent
+			if err := json.Unmarshal(scanner.Bytes(), &evt); err == nil {
+				history = append(history, evt)
+			}
+		}
+		b.history[projectID] = history
+	}
+	b.historyLoaded[projectID] = true
+}
+
 // Subscribe attaches a new SSE client channel for a project ID.
 func (b *LogBroadcaster) Subscribe(projectID string) (chan LogEvent, func()) {
+	b.loadHistory(projectID)
+
 	ch := make(chan LogEvent, 100)
 
 	b.mu.Lock()
@@ -259,5 +311,39 @@ func HandleDeploymentLogsSSE() http.HandlerFunc {
 				}
 			}
 		}
+	}
+}
+
+// HandleProjectLogsHistory returns the historical build logs for a project as JSON.
+// GET /api/projects/{id}/logs/history
+func HandleProjectLogsHistory() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.URL.Query().Get("id")
+		if projectID == "" {
+			parts := strings.Split(r.URL.Path, "/")
+			if len(parts) >= 4 {
+				projectID = parts[3]
+			}
+		}
+
+		if projectID == "" {
+			http.Error(w, "Project ID is required", http.StatusBadRequest)
+			return
+		}
+
+		globalLogBroadcaster.loadHistory(projectID)
+
+		globalLogBroadcaster.mu.RLock()
+		history := globalLogBroadcaster.history[projectID]
+		globalLogBroadcaster.mu.RUnlock()
+
+		if history == nil {
+			history = []LogEvent{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"logs": history,
+		})
 	}
 }

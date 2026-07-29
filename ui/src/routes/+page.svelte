@@ -398,8 +398,8 @@
 					onPruneSystem={handlePruneSystem}
 				/>
 			{:else if selectedProject && selectedProject.services[selectedServiceIdx]}
-				{@const currentSvc = selectedProject.services[selectedServiceIdx]}
-				{@const currentSvcContainer = containers.find(c => c.name === `devpnl-${selectedProject.blueprint.name.toLowerCase()}-${currentSvc.name.toLowerCase()}`)}
+				{@const currentSvc = selectedProject!.services[selectedServiceIdx]}
+				{@const currentSvcContainer = containers.find(c => c.name === `devpnl-${selectedProject!.blueprint.name.toLowerCase()}-${currentSvc.name.toLowerCase()}`)}
 				{@const svcStatus = currentSvcContainer ? currentSvcContainer.status : 'stopped'}
 				
 				<div class="flex flex-col h-full bg-gray-50">

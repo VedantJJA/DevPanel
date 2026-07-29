@@ -39,6 +39,14 @@ func HandleAppProxy(dockClient *Client) http.HandlerFunc {
 		var found bool
 		var bestScore int = -1
 
+		// Rewrite URL path so container receives root path
+		subPath := "/"
+		if len(parts) > 1 {
+			subPath = "/" + parts[1]
+		}
+		
+		isAPIRequest := strings.HasPrefix(subPath, "/api/") || subPath == "/api"
+
 		expectedPrefix := fmt.Sprintf("devpnl-%s-", projectName)
 		exactName := fmt.Sprintf("devpnl-%s", projectName)
 
@@ -61,17 +69,36 @@ func HandleAppProxy(dockClient *Client) http.HandlerFunc {
 					if port > 0 {
 						score := 0
 						lowerName := strings.ToLower(cName)
+						svcType := c.Labels["devpanel.service.type"]
 						
-						if strings.HasSuffix(lowerName, "-frontend") || strings.Contains(lowerName, "-ui") {
-							score = 100
-						} else if strings.HasSuffix(lowerName, "-web") || strings.Contains(lowerName, "app") {
-							score = 50
-						} else if strings.Contains(lowerName, "db") || strings.Contains(lowerName, "database") || strings.Contains(lowerName, "redis") || strings.Contains(lowerName, "postgres") {
-							score = -100 // Try to avoid proxying to DB directly if there's any other service
-						} else if strings.Contains(lowerName, "api") || strings.Contains(lowerName, "backend") {
-							score = 10 // Last resort for web-like things
+						if isAPIRequest {
+							// For API requests, prioritize backend/api/web
+							if svcType == "web" || svcType == "api" || svcType == "backend" {
+								score = 100
+							} else if strings.Contains(lowerName, "api") || strings.Contains(lowerName, "backend") {
+								score = 100
+							} else if strings.HasSuffix(lowerName, "-web") || strings.Contains(lowerName, "app") {
+								score = 50
+							} else if svcType == "static" || strings.HasSuffix(lowerName, "-frontend") || strings.Contains(lowerName, "-ui") {
+								score = 10 // Last resort for API
+							} else if svcType == "database" || strings.Contains(lowerName, "db") || strings.Contains(lowerName, "database") || strings.Contains(lowerName, "redis") || strings.Contains(lowerName, "postgres") {
+								score = -100
+							} else {
+								score = 5
+							}
 						} else {
-							score = 5
+							// For UI requests, prioritize frontend/static
+							if svcType == "static" || strings.HasSuffix(lowerName, "-frontend") || strings.Contains(lowerName, "-ui") {
+								score = 100
+							} else if svcType == "web" || strings.HasSuffix(lowerName, "-web") || strings.Contains(lowerName, "app") {
+								score = 50
+							} else if svcType == "api" || svcType == "backend" || strings.Contains(lowerName, "api") || strings.Contains(lowerName, "backend") {
+								score = 10 
+							} else if svcType == "database" || strings.Contains(lowerName, "db") || strings.Contains(lowerName, "database") || strings.Contains(lowerName, "redis") || strings.Contains(lowerName, "postgres") {
+								score = -100
+							} else {
+								score = 5
+							}
 						}
 
 						if score > bestScore {
@@ -109,11 +136,7 @@ func HandleAppProxy(dockClient *Client) http.HandlerFunc {
 
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
-		// Rewrite URL path so container receives root path
-		subPath := "/"
-		if len(parts) > 1 {
-			subPath = "/" + parts[1]
-		}
+
 
 		r.URL.Path = subPath
 		r.URL.RawPath = subPath

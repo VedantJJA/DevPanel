@@ -70,8 +70,9 @@ type ContainerSummary struct {
 	Names   []string `json:"Names"`
 	Image   string `json:"Image"`
 	State   string `json:"State"`
-	Status  string `json:"Status"`
-	Ports   []Port `json:"Ports"`
+	Status  string            `json:"Status"`
+	Ports   []Port            `json:"Ports"`
+	Labels  map[string]string `json:"Labels"`
 	Created int64  `json:"Created"`
 }
 
@@ -268,6 +269,7 @@ type ContainerCreateConfig struct {
 	Env          []string            `json:"Env,omitempty"`
 	Cmd          []string            `json:"Cmd,omitempty"`
 	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
+	Labels       map[string]string   `json:"Labels,omitempty"`
 	HostConfig   HostConfig          `json:"HostConfig,omitempty"`
 }
 
@@ -536,9 +538,13 @@ type LogEntry struct {
 // Logs streams container logs, demultiplexing the 8-byte binary headers
 // that Docker uses to separate stdout and stderr. Results are sent to ch.
 // It blocks until ctx is cancelled or an error occurs.
-func (c *Client) Logs(ctx context.Context, containerID string, follow bool, tail string, ch chan<- *LogEntry) error {
+func (c *Client) Logs(ctx context.Context, containerID string, follow bool, tail string, since int64, ch chan<- *LogEntry) error {
 	url := apiURL(fmt.Sprintf("/containers/%s/logs?stdout=true&stderr=true&follow=%t&tail=%s&timestamps=true",
 		containerID, follow, tail))
+	
+	if since > 0 {
+		url += fmt.Sprintf("&since=%d", since)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

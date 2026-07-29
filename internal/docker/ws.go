@@ -3,8 +3,10 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -111,7 +113,7 @@ func HandleLogsWS(dockerClient *Client) http.HandlerFunc {
 		errCh := make(chan error, 1)
 
 		go func() {
-			errCh <- dockerClient.Logs(ctx, containerID, true, tail, logCh)
+			errCh <- dockerClient.Logs(ctx, containerID, true, tail, 0, logCh)
 		}()
 
 		// Batch log entries to avoid flooding the WebSocket.
@@ -164,4 +166,105 @@ func flushLogs(ctx context.Context, conn *websocket.Conn, entries []*LogEntry) e
 	msg := WSMessage{Type: "log", Data: entries}
 	data, _ := json.Marshal(msg)
 	return conn.Write(ctx, websocket.MessageText, data)
+}
+
+// HandleServiceLogsSSE streams container logs natively using Server-Sent Events (SSE).
+// Path format: /api/projects/{id}/services/{serviceName}/logs
+func HandleServiceLogsSSE(dockClient *Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		parts := strings.Split(r.URL.Path, "/")
+		if len(parts) < 6 {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
+		
+		projectID := parts[3]
+		serviceName := parts[5]
+		containerName := fmt.Sprintf("devpnl-%s-%s", projectID, serviceName)
+
+		// Resolve container ID from name
+		containers, _ := dockClient.ListContainers(r.Context())
+		var containerID string
+		for _, c := range containers {
+			for _, n := range c.Names {
+				if n == "/"+containerName || n == containerName {
+					containerID = c.ID
+					break
+				}
+			}
+			if containerID != "" {
+				break
+			}
+		}
+
+		if containerID == "" {
+			http.Error(w, "Container not found", http.StatusNotFound)
+			return
+		}
+
+		sinceStr := r.URL.Query().Get("since")
+		var since int64
+		if sinceStr == "1h" {
+			since = time.Now().Add(-1 * time.Hour).Unix()
+		} else if sinceStr == "24h" {
+			since = time.Now().Add(-24 * time.Hour).Unix()
+		}
+
+		ctx := r.Context()
+		logCh := make(chan *LogEntry, 64)
+		errCh := make(chan error, 1)
+
+		go func() {
+			errCh <- dockClient.Logs(ctx, containerID, true, "100", since, logCh)
+		}()
+
+		fmt.Fprintf(w, "event: connected\ndata: %s\n\n", containerID)
+		flusher.Flush()
+
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fmt.Fprintf(w, ": ping\n\n")
+				flusher.Flush()
+			case entry, ok := <-logCh:
+				if !ok {
+					return
+				}
+				// Format into LogEvent compatible with UI
+				evt := LogEvent{
+					Timestamp: entry.Timestamp,
+					Stage:     "runtime",
+					Service:   serviceName,
+					Message:   entry.Line,
+					Level:     "info",
+				}
+				if entry.Stream == "stderr" {
+					evt.Level = "error"
+				}
+
+				data, err := json.Marshal(evt)
+				if err == nil {
+					fmt.Fprintf(w, "data: %s\n\n", string(data))
+					flusher.Flush()
+				}
+			case <-errCh:
+				return
+			}
+		}
+	}
 }
