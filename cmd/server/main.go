@@ -200,8 +200,24 @@ func main() {
 	fileServer := http.FileServer(http.FS(uiContent))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Do not return SPA 200.html fallback for API or WebSocket endpoints
+		// Do not return SPA 200.html fallback for API or WebSocket endpoints,
+		// BUT first check if the API request originated from a hosted app.
+		// If so, redirect it to the app's proxy subpath.
 		if strings.HasPrefix(r.URL.Path, "/api") || strings.HasPrefix(r.URL.Path, "/ws") || r.URL.Path == "/ask" || r.URL.Path == "/healthz" {
+			if strings.HasPrefix(r.URL.Path, "/api") {
+				referer := r.Header.Get("Referer")
+				if referer != "" {
+					refParts := strings.Split(referer, "/app/")
+					if len(refParts) > 1 {
+						projectName := strings.Split(refParts[1], "/")[0]
+						if projectName != "" {
+							// Redirect the /api/* call to the app's proxy so the backend container handles it
+							http.Redirect(w, r, "/app/"+projectName+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+							return
+						}
+					}
+				}
+			}
 			http.NotFound(w, r)
 			return
 		}
