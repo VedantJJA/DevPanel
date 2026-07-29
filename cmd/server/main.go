@@ -217,6 +217,20 @@ func main() {
 
 		// Check if the requested file exists in embedded FS
 		if _, err := fs.Stat(uiContent, cleanedPath); err != nil {
+			// If not found in DevPanel UI, check if this is an asset requested by a hosted app
+			referer := r.Header.Get("Referer")
+			if referer != "" {
+				parts := strings.Split(referer, "/app/")
+				if len(parts) > 1 {
+					projectName := strings.Split(parts[1], "/")[0]
+					if projectName != "" {
+						// Redirect root asset to the app's subpath
+						http.Redirect(w, r, "/app/"+projectName+r.URL.Path, http.StatusTemporaryRedirect)
+						return
+					}
+				}
+			}
+
 			// Fallback to SPA 200.html for client-side routing
 			r.URL.Path = "/200.html"
 		}
