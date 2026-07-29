@@ -37,27 +37,50 @@ func HandleAppProxy(dockClient *Client) http.HandlerFunc {
 
 		var targetPort uint16
 		var found bool
+		var bestScore int = -1
 
 		expectedPrefix := fmt.Sprintf("devpnl-%s-", projectName)
+		exactName := fmt.Sprintf("devpnl-%s", projectName)
+
 		for _, c := range containers {
 			cName := ""
 			if len(c.Names) > 0 {
 				cName = strings.TrimPrefix(c.Names[0], "/")
 			}
 
-			if strings.HasPrefix(cName, expectedPrefix) || cName == fmt.Sprintf("devpnl-%s", projectName) {
+			if strings.HasPrefix(cName, expectedPrefix) || cName == exactName {
 				if c.State == "running" && len(c.Ports) > 0 {
+					var port uint16
 					for _, p := range c.Ports {
 						if p.PublicPort > 0 {
-							targetPort = p.PublicPort
-							found = true
+							port = p.PublicPort
 							break
 						}
 					}
+
+					if port > 0 {
+						score := 0
+						lowerName := strings.ToLower(cName)
+						
+						if strings.HasSuffix(lowerName, "-frontend") || strings.Contains(lowerName, "-ui") {
+							score = 100
+						} else if strings.HasSuffix(lowerName, "-web") || strings.Contains(lowerName, "app") {
+							score = 50
+						} else if strings.Contains(lowerName, "db") || strings.Contains(lowerName, "database") || strings.Contains(lowerName, "redis") || strings.Contains(lowerName, "postgres") {
+							score = -100 // Try to avoid proxying to DB directly if there's any other service
+						} else if strings.Contains(lowerName, "api") || strings.Contains(lowerName, "backend") {
+							score = 10 // Last resort for web-like things
+						} else {
+							score = 5
+						}
+
+						if score > bestScore {
+							bestScore = score
+							targetPort = port
+							found = true
+						}
+					}
 				}
-			}
-			if found {
-				break
 			}
 		}
 
