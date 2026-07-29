@@ -28,11 +28,13 @@ type Blueprint struct {
 
 // ServiceConfig represents a single application service or microservice in the blueprint.
 type ServiceConfig struct {
-	Type   string        `yaml:"type"`   // "web", "static", "database", "worker"
-	Image  string        `yaml:"image"`  // pre-built image (e.g. "postgres:15")
-	Source SourceConfig  `yaml:"source"` // monorepo source details
-	Build  BuildConfig   `yaml:"build"`  // build engine options
-	Deploy DeployConfig  `yaml:"deploy"` // ports, env vars, runtime settings
+	Type         string        `yaml:"type"`          // "web", "static", "database", "worker"
+	Image        string        `yaml:"image"`         // pre-built image (e.g. "postgres:15")
+	Source       SourceConfig  `yaml:"source"`        // monorepo source details
+	Build        BuildConfig   `yaml:"build"`         // build engine options
+	Deploy       DeployConfig  `yaml:"deploy"`        // ports, env vars, runtime settings
+	BuildCommand string        `yaml:"buildCommand"`  // Render-style alias for build.command
+	StartCommand string        `yaml:"startCommand"`  // Render-style alias for deploy.command
 }
 
 // SourceConfig configures git repository and monorepo directory location.
@@ -239,26 +241,36 @@ func (o *BlueprintOrchestrator) buildServiceImage(ctx context.Context, serviceNa
 
 	fullDockerfilePath := filepath.Join(targetDir, dockerfilePath)
 
+	effectiveBuildCmd := cfg.Build.Command
+	if cfg.BuildCommand != "" {
+		effectiveBuildCmd = cfg.BuildCommand
+	}
+
+	effectiveStartCmd := cfg.Deploy.Command
+	if cfg.StartCommand != "" {
+		effectiveStartCmd = cfg.StartCommand
+	}
+
 	// If no Dockerfile exists, auto-generate production Dockerfile based on engine/type
 	if _, err := os.Stat(fullDockerfilePath); os.IsNotExist(err) {
 		if cfg.Build.Engine == "static" || cfg.Type == "static" {
 			log.Printf("blueprint: generating static Nginx Dockerfile for %s", serviceName)
-			if err := generateStaticDockerfile(fullDockerfilePath, cfg.Build.OutputDir, cfg.Build.Command); err != nil {
+			if err := generateStaticDockerfile(fullDockerfilePath, cfg.Build.OutputDir, effectiveBuildCmd); err != nil {
 				return fmt.Errorf("generate static dockerfile: %w", err)
 			}
 		} else if cfg.Build.Engine == "python" || cfg.Type == "python" {
 			log.Printf("blueprint: generating Python Dockerfile for %s", serviceName)
-			if err := generatePythonDockerfile(fullDockerfilePath, cfg.Deploy.Command); err != nil {
+			if err := generatePythonDockerfile(fullDockerfilePath, effectiveStartCmd); err != nil {
 				return fmt.Errorf("generate python dockerfile: %w", err)
 			}
 		} else if cfg.Build.Engine == "go" || cfg.Type == "go" {
 			log.Printf("blueprint: generating Go Dockerfile for %s", serviceName)
-			if err := generateGoDockerfile(fullDockerfilePath, cfg.Build.Command); err != nil {
+			if err := generateGoDockerfile(fullDockerfilePath, effectiveBuildCmd); err != nil {
 				return fmt.Errorf("generate go dockerfile: %w", err)
 			}
 		} else {
 			log.Printf("blueprint: generating Node.js Dockerfile for %s", serviceName)
-			if err := generateNodeDockerfile(fullDockerfilePath, cfg.Build.Command, cfg.Deploy.Command); err != nil {
+			if err := generateNodeDockerfile(fullDockerfilePath, effectiveBuildCmd, effectiveStartCmd); err != nil {
 				return fmt.Errorf("generate node dockerfile: %w", err)
 			}
 		}
@@ -514,7 +526,7 @@ CMD ["nginx", "-g", "daemon off;"]
 // generateNodeDockerfile writes a production-ready Node.js Dockerfile.
 func generateNodeDockerfile(destPath string, buildCmd string, startCmd string) error {
 	if buildCmd == "" {
-		buildCmd = "npm ci --only=production || npm install"
+		buildCmd = "npm ci || npm install"
 	}
 	if startCmd == "" {
 		startCmd = "npm start"
@@ -523,8 +535,9 @@ func generateNodeDockerfile(destPath string, buildCmd string, startCmd string) e
 	content := fmt.Sprintf(`FROM node:22-alpine
 WORKDIR /app
 COPY package*.json ./
-RUN %s
+RUN npm ci || npm install
 COPY . .
+RUN %s
 EXPOSE 8080
 CMD ["sh", "-c", "%s"]
 `, buildCmd, startCmd)

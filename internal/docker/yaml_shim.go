@@ -43,8 +43,9 @@ func parseBlueprintYAML(data []byte, v interface{}) error {
 			}
 
 			buildMap := make(map[string]interface{})
+			var rootBuildCmd, rootStartCmd string
 			if cmd, ok := s["buildCommand"].(string); ok {
-				buildMap["command"] = cmd
+				rootBuildCmd = cmd
 			}
 			if out, ok := s["staticPublishPath"].(string); ok {
 				buildMap["output_dir"] = out
@@ -55,7 +56,7 @@ func parseBlueprintYAML(data []byte, v interface{}) error {
 
 			deployMap := make(map[string]interface{})
 			if cmd, ok := s["startCommand"].(string); ok {
-				deployMap["command"] = cmd
+				rootStartCmd = cmd
 			}
 
 			// Translate envVars list to env map
@@ -81,10 +82,12 @@ func parseBlueprintYAML(data []byte, v interface{}) error {
 
 			// Assemble DevPanel service config
 			svcMap[name] = map[string]interface{}{
-				"type":   devType,
-				"build":  buildMap,
-				"deploy": deployMap,
-				"source": sourceMap,
+				"type":         devType,
+				"build":        buildMap,
+				"deploy":       deployMap,
+				"source":       sourceMap,
+				"buildCommand": rootBuildCmd,
+				"startCommand": rootStartCmd,
 			}
 		}
 
