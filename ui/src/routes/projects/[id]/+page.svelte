@@ -15,7 +15,7 @@
 	let currentSvc = $derived(projectData?.services?.[activeServiceIdx]);
 	let sseUrl = $derived.by(() => {
 		if (logType === 'build') {
-			let url = `/api/projects/${projectId}/logs/sse`;
+			let url = `/api/projects/${projectId}/logs`;
 			if (activeServiceIdx >= 0 && projectData?.services[activeServiceIdx]) {
 				url += `?service=${projectData.services[activeServiceIdx].name}`;
 			}
