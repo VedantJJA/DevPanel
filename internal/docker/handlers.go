@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/VedantJJA/devpnl/internal/db"
 )
@@ -38,50 +39,56 @@ func HandleListContainers(dockClient *Client, database *db.DB) http.HandlerFunc 
 			return
 		}
 
-		var dtoList []ContainerDTO
-		for _, c := range containers {
-			name := "unnamed"
-			if len(c.Names) > 0 {
-				name = c.Names[0]
-				if len(name) > 0 && name[0] == '/' {
-					name = name[1:]
+		dtoList := make([]ContainerDTO, len(containers))
+		var wg sync.WaitGroup
+
+		for i, c := range containers {
+			wg.Add(1)
+			go func(idx int, c ContainerSummary) {
+				defer wg.Done()
+				name := "unnamed"
+				if len(c.Names) > 0 {
+					name = c.Names[0]
+					if len(name) > 0 && name[0] == '/' {
+						name = name[1:]
+					}
 				}
-			}
 
-			status := "stopped"
-			if c.State == "running" {
-				status = "running"
-			} else if c.State == "restarting" {
-				status = "restarting"
-			}
-
-			shortID := c.ID
-			if len(shortID) > 12 {
-				shortID = shortID[:12]
-			}
-
-			// Get one-shot stats for running container if available
-			var cpu float64
-			var mem float64
-			if status == "running" {
-				stats, err := dockClient.Stats(r.Context(), c.ID)
-				if err == nil && stats != nil {
-					cpu = stats.CPUPercent
-					mem = stats.MemUsageMB
+				status := "stopped"
+				if c.State == "running" {
+					status = "running"
+				} else if c.State == "restarting" {
+					status = "restarting"
 				}
-			}
 
-			dtoList = append(dtoList, ContainerDTO{
-				ID:         shortID,
-				Name:       name,
-				Image:      c.Image,
-				Status:     status,
-				Port:       FormatPorts(c.Ports),
-				CPUPercent: MathRound(cpu, 1),
-				MemoryMB:   MathRound(mem, 1),
-				Uptime:     c.Status,
-			})
+				shortID := c.ID
+				if len(shortID) > 12 {
+					shortID = shortID[:12]
+				}
+
+				var cpu, mem float64
+				if status == "running" {
+					// dockClient.Stats is concurrent-safe (it just does an HTTP request to Docker)
+					stats, err := dockClient.Stats(r.Context(), c.ID)
+					if err == nil && stats != nil {
+						cpu = stats.CPUPercent
+						mem = stats.MemUsageMB
+					}
+				}
+
+				dtoList[idx] = ContainerDTO{
+					ID:         shortID,
+					Name:       name,
+					Image:      c.Image,
+					Status:     status,
+					Port:       FormatPorts(c.Ports),
+					CPUPercent: MathRound(cpu, 1),
+					MemoryMB:   MathRound(mem, 1),
+					Uptime:     c.Status,
+				}
+			}(i, c)
 		}
+		wg.Wait()
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"containers": dtoList,

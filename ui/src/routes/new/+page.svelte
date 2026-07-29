@@ -543,8 +543,11 @@
 			<!-- Background overlay -->
 			<div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity backdrop-blur-sm" aria-hidden="true" onclick={() => (preDeployData = null)}></div>
 
+			<!-- This element is to trick the browser into centering the modal contents. -->
+			<span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+
 			<!-- Modal panel -->
-			<div class="inline-block align-bottom bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full border border-gray-100">
+			<div class="inline-block align-bottom bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full border border-gray-100 relative z-10">
 				<div class="bg-white px-4 pt-5 pb-4 sm:p-8 sm:pb-6">
 					<div class="sm:flex sm:items-start">
 						<div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
