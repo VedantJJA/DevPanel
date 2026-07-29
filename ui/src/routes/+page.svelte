@@ -319,7 +319,7 @@
 		<!-- Mobile Header Bar -->
 		<div class="md:hidden h-16 border-b border-gray-200 bg-white flex items-center justify-between px-4 shrink-0 z-10">
 			<div class="flex items-center gap-3">
-				<button type="button" class="text-gray-600 p-1 hover:bg-gray-100 rounded-lg" onclick={() => (mobileMenuOpen = !mobileMenuOpen)}>
+				<button type="button" aria-label="Toggle mobile menu" class="text-gray-600 p-1 hover:bg-gray-100 rounded-lg" onclick={() => (mobileMenuOpen = !mobileMenuOpen)}>
 					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
 				</button>
 				<div class="flex items-center gap-2 text-gray-900 font-bold text-lg tracking-tight">

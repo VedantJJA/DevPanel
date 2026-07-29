@@ -66,6 +66,9 @@
 	function handleTypeSelect(type: any) {
 		selectedType = type;
 		appName = `my-${type.id}-app`;
+		buildCommand = '';
+		startCommand = '';
+
 		if (type.id === 'static') {
 			containerPort = 80;
 			buildCommand = 'npm ci && npm run build';

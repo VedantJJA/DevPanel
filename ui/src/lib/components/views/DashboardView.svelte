@@ -120,8 +120,11 @@
 			{:else}
 				{#each containers.filter(c => c.name.toLowerCase().includes(search.toLowerCase())) as container}
 					<div
+						role="button"
+						tabindex="0"
 						class="p-4 sm:p-5 hover:bg-gray-50 transition-colors cursor-pointer group flex flex-col sm:flex-row sm:items-center justify-between gap-4"
 						onclick={() => onSelectService(container)}
+						onkeydown={(e) => e.key === 'Enter' && onSelectService(container)}
 					>
 						<div class="flex items-start gap-4 flex-1">
 							<div class="p-2.5 bg-gray-50 rounded-lg text-blue-600 border border-gray-200 group-hover:bg-blue-50 transition-colors">
@@ -151,11 +154,11 @@
 								<div class="font-mono text-xs">{container.uptime || 'Active'}</div>
 							</div>
 
-							<div class="flex items-center gap-2" onclick={(e) => e.stopPropagation()}>
+							<div role="none" class="flex items-center gap-2" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 								<DropdownMenu
 									right
 									trigger={() => (
-										`<button type="button" class="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
+										`<button type="button" aria-label="Container options" class="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
 											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/></svg>
 										</button>`
 									)}

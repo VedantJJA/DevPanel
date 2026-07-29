@@ -368,6 +368,9 @@ func (o *BlueprintOrchestrator) deployContainer(ctx context.Context, project str
 		},
 	}
 
+	// Always attempt to forcefully remove an existing container with the same name to prevent HTTP 409 conflicts
+	_ = o.Client.RemoveContainer(ctx, containerName, true)
+
 	containerID, err := o.Client.CreateContainer(ctx, containerName, config)
 	if err != nil {
 		return "", fmt.Errorf("create container %s: %w", containerName, err)

@@ -21,7 +21,9 @@
 		onPruneSystem
 	}: Props = $props();
 
+	// svelte-ignore state_referenced_locally
 	let usernameInput = $state(githubUsername);
+	// svelte-ignore state_referenced_locally
 	let tokenInput = $state(githubToken);
 	let saveMessage = $state<string | null>(null);
 

@@ -94,7 +94,7 @@
 	<!-- Top Bar Header -->
 	<header class="border-b border-gray-200 bg-white py-4 px-6 md:px-10 flex items-center justify-between shadow-sm">
 		<div class="flex items-center gap-3">
-			<a href="/" class="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
+			<a href="/" aria-label="Back to Dashboard" class="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
 				<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
 			</a>
 			<div>
