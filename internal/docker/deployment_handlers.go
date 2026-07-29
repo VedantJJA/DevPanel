@@ -281,6 +281,8 @@ func HandleDeploymentLogsSSE() http.HandlerFunc {
 			return
 		}
 
+		serviceFilter := r.URL.Query().Get("service")
+
 		ch, unsubscribe := globalLogBroadcaster.Subscribe(projectID)
 		defer unsubscribe()
 
@@ -304,6 +306,12 @@ func HandleDeploymentLogsSSE() http.HandlerFunc {
 				if !ok {
 					return
 				}
+				
+				// Filter by service if provided (always include 'engine' for overall status)
+				if serviceFilter != "" && evt.Service != serviceFilter && evt.Service != "engine" {
+					continue
+				}
+
 				data, err := json.Marshal(evt)
 				if err == nil {
 					fmt.Fprintf(w, "data: %s\n\n", string(data))

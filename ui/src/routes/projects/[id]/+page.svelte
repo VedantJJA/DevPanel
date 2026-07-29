@@ -14,7 +14,13 @@
 	let logType = $state<'build' | 'live' | '1h' | '24h'>('build');
 	let currentSvc = $derived(projectData?.services?.[activeServiceIdx]);
 	let sseUrl = $derived.by(() => {
-		if (logType === 'build') return `/api/projects/${projectId}/logs`;
+		if (logType === 'build') {
+			let url = `/api/projects/${projectId}/logs/sse`;
+			if (activeServiceIdx >= 0 && projectData?.services[activeServiceIdx]) {
+				url += `?service=${projectData.services[activeServiceIdx].name}`;
+			}
+			return url;
+		}
 		if (!currentSvc) return '';
 		if (logType === 'live') return `/api/projects/${projectId}/services/${currentSvc.name}/logs`;
 		if (logType === '1h') return `/api/projects/${projectId}/services/${currentSvc.name}/logs?since=1h`;

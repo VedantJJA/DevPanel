@@ -258,7 +258,7 @@ func (o *BlueprintOrchestrator) buildServiceImage(ctx context.Context, serviceNa
 			}
 		} else {
 			log.Printf("blueprint: generating Node.js Dockerfile for %s", serviceName)
-			if err := generateNodeDockerfile(fullDockerfilePath); err != nil {
+			if err := generateNodeDockerfile(fullDockerfilePath, cfg.Build.Command, cfg.Deploy.Command); err != nil {
 				return fmt.Errorf("generate node dockerfile: %w", err)
 			}
 		}
@@ -271,11 +271,11 @@ func (o *BlueprintOrchestrator) buildServiceImage(ctx context.Context, serviceNa
 	}
 
 	log.Printf("blueprint: tar context prepared for %s (%d bytes)", serviceName, tarBuf.Len())
-	return o.buildImageViaAPI(ctx, tarBuf, imageName, dockerfilePath)
+	return o.buildImageViaAPI(ctx, tarBuf, imageName, dockerfilePath, serviceName)
 }
 
 // buildImageViaAPI sends build context tarball to Docker Engine API.
-func (o *BlueprintOrchestrator) buildImageViaAPI(ctx context.Context, tarBuf *bytes.Buffer, imageName string, dockerfilePath string) error {
+func (o *BlueprintOrchestrator) buildImageViaAPI(ctx context.Context, tarBuf *bytes.Buffer, imageName string, dockerfilePath string, serviceName string) error {
 	url := fmt.Sprintf("http://docker/build?t=%s&dockerfile=%s", imageName, dockerfilePath)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, tarBuf)
 	if err != nil {
@@ -310,7 +310,7 @@ func (o *BlueprintOrchestrator) buildImageViaAPI(ctx context.Context, tarBuf *by
 			if buildMsg.Stream != "" {
 				msg := strings.TrimSpace(buildMsg.Stream)
 				if msg != "" {
-					log.Printf("blueprint-build [%s]: %s", imageName, msg)
+					o.log("build", serviceName, msg, "info")
 				}
 			}
 			if buildMsg.Error != "" {
@@ -512,15 +512,22 @@ CMD ["nginx", "-g", "daemon off;"]
 }
 
 // generateNodeDockerfile writes a production-ready Node.js Dockerfile.
-func generateNodeDockerfile(destPath string) error {
-	content := `FROM node:18-alpine
+func generateNodeDockerfile(destPath string, buildCmd string, startCmd string) error {
+	if buildCmd == "" {
+		buildCmd = "npm ci --only=production || npm install"
+	}
+	if startCmd == "" {
+		startCmd = "npm start"
+	}
+
+	content := fmt.Sprintf(`FROM node:18-alpine
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production || npm install
+RUN %s
 COPY . .
 EXPOSE 8080
-CMD ["npm", "start"]
-`
+CMD ["sh", "-c", "%s"]
+`, buildCmd, startCmd)
 	return os.WriteFile(destPath, []byte(content), 0644)
 }
 
