@@ -495,7 +495,7 @@ func generateStaticDockerfile(destPath string, outputDir string, buildCmd string
 	if buildCmd == "" {
 		buildCmd = "npm run build"
 	}
-	content := fmt.Sprintf(`FROM node:18-alpine AS builder
+	content := fmt.Sprintf(`FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci || npm install
@@ -520,7 +520,7 @@ func generateNodeDockerfile(destPath string, buildCmd string, startCmd string) e
 		startCmd = "npm start"
 	}
 
-	content := fmt.Sprintf(`FROM node:18-alpine
+	content := fmt.Sprintf(`FROM node:22-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN %s
