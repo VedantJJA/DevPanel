@@ -66,20 +66,23 @@ func (d *DB) Conn() *sql.DB {
 // idempotent (IF NOT EXISTS).
 func (d *DB) migrate() error {
 	migrations := []string{
+		migrationSettings,
 		migrationProjects,
 		migrationContainers,
 		migrationDomains,
 		migrationBlueprints,
 		migrationServices,
 		migrationDeployments,
-		migrationSettings,
 	}
 
-	for i, m := range migrations {
-		if _, err := d.conn.Exec(m); err != nil {
-			return fmt.Errorf("db: migration %d: %w", i, err)
+	for _, query := range migrations {
+		if _, err := d.conn.Exec(query); err != nil {
+			return fmt.Errorf("db: migration failed: %w\nQuery: %s", err, query)
 		}
 	}
+
+	// Dynamic schema updates
+	_, _ = d.conn.Exec(`ALTER TABLE services ADD COLUMN image TEXT NOT NULL DEFAULT ''`)
 
 	log.Println("db: migrations complete")
 	return nil
@@ -150,6 +153,7 @@ CREATE TABLE IF NOT EXISTS services (
     project_id     TEXT    NOT NULL,
     name           TEXT    NOT NULL,
     type           TEXT    NOT NULL DEFAULT 'web',
+    image          TEXT    NOT NULL DEFAULT '',
     env_json       TEXT    NOT NULL DEFAULT '{}',
     port           INTEGER NOT NULL DEFAULT 0,
     custom_domain  TEXT    NOT NULL DEFAULT '',

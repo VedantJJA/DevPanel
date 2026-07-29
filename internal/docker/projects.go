@@ -24,6 +24,7 @@ type createProjectRequest struct {
 type createServiceIn struct {
 	Name         string            `json:"name"`
 	Type         string            `json:"type"`
+	Image        string            `json:"image"`
 	EnvVars      map[string]string `json:"env_vars"`
 	Port         int               `json:"port"`
 	CustomDomain string            `json:"custom_domain"`
@@ -95,7 +96,7 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 		// Persist per-service settings
 		for _, s := range req.Services {
 			rec := &db.ServiceRecord{
-				ProjectID: projectID, Name: s.Name, Type: s.Type,
+				ProjectID: projectID, Name: s.Name, Type: s.Type, Image: s.Image,
 				EnvVars: s.EnvVars, Port: s.Port, CustomDomain: s.CustomDomain,
 				AutoDeploy: s.AutoDeploy, BuildCommand: s.BuildCommand,
 				StartCommand: s.StartCommand, InstanceType: orDefault(s.InstanceType, "free"),
@@ -269,6 +270,7 @@ func HandleTriggerProjectDeploy(database *db.DB, dockClient *Client) http.Handle
 			for _, s := range svcs {
 				sc := ServiceConfig{
 					Type: s.Type,
+					Image: s.Image,
 					Deploy: DeployConfig{
 						Port:    s.Port,
 						Env:     s.EnvVars,
@@ -278,10 +280,8 @@ func HandleTriggerProjectDeploy(database *db.DB, dockClient *Client) http.Handle
 						Command: s.BuildCommand,
 					},
 				}
-				if s.Type == "postgres" {
-					sc.Image = "postgres:15-alpine"
-				} else if s.Type == "redis" {
-					sc.Image = "redis:7-alpine"
+				if s.Image != "" {
+					// Prebuilt image, no build engine needed
 				} else if s.Type == "static" {
 					sc.Build.Engine = "static"
 					sc.Build.OutputDir = "dist" // Default

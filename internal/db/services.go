@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -14,6 +15,7 @@ type ServiceRecord struct {
 	ProjectID    string            `json:"project_id"`
 	Name         string            `json:"name"`
 	Type         string            `json:"type"`
+	Image        string            `json:"image"`
 	EnvVars      map[string]string `json:"env_vars"`
 	Port         int               `json:"port"`
 	CustomDomain string            `json:"custom_domain"`
@@ -40,11 +42,12 @@ func (d *DB) UpsertService(ctx context.Context, s *ServiceRecord) error {
 		autoDeploy = 1
 	}
 	q := `
-	INSERT INTO services (project_id, name, type, env_json, port, custom_domain,
+	INSERT INTO services (project_id, name, type, image, env_json, port, custom_domain,
 	                      auto_deploy, build_command, start_command, instance_type)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(project_id, name) DO UPDATE SET
 	    type           = excluded.type,
+	    image          = excluded.image,
 	    env_json       = excluded.env_json,
 	    port           = excluded.port,
 	    custom_domain  = excluded.custom_domain,
@@ -53,7 +56,7 @@ func (d *DB) UpsertService(ctx context.Context, s *ServiceRecord) error {
 	    start_command  = excluded.start_command,
 	    instance_type  = excluded.instance_type,
 	    updated_at     = strftime('%Y-%m-%dT%H:%M:%SZ','now');`
-	_, err = d.conn.ExecContext(ctx, q, s.ProjectID, s.Name, s.Type, string(envJSON),
+	_, err = d.conn.ExecContext(ctx, q, s.ProjectID, s.Name, s.Type, s.Image, string(envJSON),
 		s.Port, s.CustomDomain, autoDeploy, s.BuildCommand, s.StartCommand, s.InstanceType)
 	if err != nil {
 		return fmt.Errorf("db: upsert service %s/%s: %w", s.ProjectID, s.Name, err)
@@ -64,26 +67,30 @@ func (d *DB) UpsertService(ctx context.Context, s *ServiceRecord) error {
 // ListServices returns all services for a project.
 func (d *DB) ListServices(ctx context.Context, projectID string) ([]ServiceRecord, error) {
 	ctx = contextOrBg(ctx)
-	rows, err := d.conn.QueryContext(ctx, `
-	    SELECT id, project_id, name, type, env_json, port, custom_domain,
-	           auto_deploy, build_command, start_command, instance_type, created_at, updated_at
-	    FROM services WHERE project_id = ? ORDER BY id ASC;`, projectID)
+	q := `
+	SELECT id, name, type, image, env_json, port, custom_domain,
+	       auto_deploy, build_command, start_command, instance_type, created_at, updated_at
+	FROM services
+	WHERE project_id = ?
+	ORDER BY created_at ASC`
+	rows, err := d.conn.QueryContext(ctx, q, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("db: list services: %w", err)
+		return nil, fmt.Errorf("db: list services for %s: %w", projectID, err)
 	}
 	defer rows.Close()
+
 	var out []ServiceRecord
 	for rows.Next() {
 		var s ServiceRecord
 		var envJSON string
-		var autoDeploy int
-		if err := rows.Scan(&s.ID, &s.ProjectID, &s.Name, &s.Type, &envJSON, &s.Port,
-			&s.CustomDomain, &autoDeploy, &s.BuildCommand, &s.StartCommand, &s.InstanceType,
-			&s.CreatedAt, &s.UpdatedAt); err != nil {
+		var ad int
+		s.ProjectID = projectID
+		if err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Image, &envJSON, &s.Port, &s.CustomDomain,
+			&ad, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("db: scan service: %w", err)
 		}
 		_ = json.Unmarshal([]byte(envJSON), &s.EnvVars)
-		s.AutoDeploy = autoDeploy == 1
+		s.AutoDeploy = ad == 1
 		out = append(out, s)
 	}
 	return out, rows.Err()
@@ -94,21 +101,24 @@ func (d *DB) GetService(ctx context.Context, projectID, name string) (*ServiceRe
 	ctx = contextOrBg(ctx)
 	var s ServiceRecord
 	var envJSON string
-	var autoDeploy int
-	err := d.conn.QueryRowContext(ctx, `
-	    SELECT id, project_id, name, type, env_json, port, custom_domain,
-	           auto_deploy, build_command, start_command, instance_type, created_at, updated_at
-	    FROM services WHERE project_id = ? AND name = ?;`, projectID, name).
-		Scan(&s.ID, &s.ProjectID, &s.Name, &s.Type, &envJSON, &s.Port, &s.CustomDomain,
-			&autoDeploy, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.CreatedAt, &s.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+	var ad int
+	q := `
+	SELECT id, type, image, env_json, port, custom_domain,
+	       auto_deploy, build_command, start_command, instance_type, created_at, updated_at
+	FROM services WHERE project_id = ? AND name = ?`
+	err := d.conn.QueryRowContext(ctx, q, projectID, name).Scan(
+		&s.ID, &s.Type, &s.Image, &envJSON, &s.Port, &s.CustomDomain,
+		&ad, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("db: get service: %w", err)
 	}
+	s.ProjectID = projectID
+	s.Name = name
 	_ = json.Unmarshal([]byte(envJSON), &s.EnvVars)
-	s.AutoDeploy = autoDeploy == 1
+	s.AutoDeploy = ad == 1
 	return &s, nil
 }
 

@@ -29,7 +29,7 @@
 	const globalNav = [
 		{ id: 'dashboard', label: 'Overview', icon: 'dashboard' },
 		{ id: 'containers', label: 'Containers', icon: 'box' },
-		{ id: 'blueprints', label: 'Blueprints', icon: 'layers' },
+		{ id: 'blueprints', label: 'Hosted Projects', icon: 'layers' },
 		{ id: 'workspaces', label: 'Workspaces', icon: 'briefcase' },
 		{ id: 'settings', label: 'Settings', icon: 'settings' }
 	];

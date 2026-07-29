@@ -26,6 +26,7 @@
 	let userRepos = $state<any[]>([]);
 	let isFetchingRepos = $state(false);
 	let repoFetchError = $state<string | null>(null);
+	let isAuthenticated = $state(false);
 
 	// Service Form Configuration State
 	let appName = $state('my-awesome-app');
