@@ -38,6 +38,7 @@ export interface BlueprintItem {
 	repo_url?: string;
 	status?: 'active' | 'deploying' | 'valid' | 'error' | 'ready' | string;
 	serviceCount?: number;
+	service_count_actual?: number;
 	createdAt?: string;
 	services?: Record<string, any>;
 }

@@ -9,7 +9,7 @@
 
 	// Service types configuration matching template
 	const SERVICE_TYPES = [
-		{ id: 'blueprint', title: 'Deploy Blueprint', desc: 'Use pre-configured infra templates', icon: 'layers', color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200', needsRepo: false },
+		{ id: 'repo', title: 'Deploy from Repository', desc: 'Auto-detect services from devpanel.yaml', icon: 'layers', color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200', needsRepo: true },
 		{ id: 'web', title: 'Web Service', desc: 'Node, Python, Go, Ruby, Docker', icon: 'server', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: true },
 		{ id: 'static', title: 'Static Site', desc: 'React, Vue, Astro, HTML/CSS', icon: 'globe', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: true },
 		{ id: 'postgres', title: 'PostgreSQL', desc: 'Managed relational database', icon: 'database', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: false },
@@ -38,7 +38,7 @@
 	let containerPort = $state(80);
 	let dbVersion = $state('15');
 	let cronSchedule = $state('0 0 * * *');
-	let cronCommand = $state('python sync.py');
+	let cronTask = $state('Sync Users');
 	let envVars = $state<Record<string, string>>({});
 
 	let isDeploying = $state(false);
@@ -144,6 +144,7 @@
 					break;
 				case 'cron':
 					serviceType = 'worker';
+					startCommand = cronTask === 'Sync Users' ? 'python sync_users.py' : 'python run.py';
 					break;
 				default:
 					serviceType = 'web';
@@ -171,7 +172,7 @@
 						custom_domain: '',
 						auto_deploy: true,
 						build_command: buildCommand,
-						start_command: selectedType?.id === 'cron' ? cronCommand : startCommand,
+						start_command: startCommand,
 						instance_type: 'starter'
 				  }];
 
@@ -418,33 +419,35 @@
 				<!-- Dynamic Specific Fields per Service Type -->
 				{#if selectedType.id === 'web'}
 					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-						<div>
-							<label for="webRuntime" class="block text-sm font-medium text-gray-700 mb-1.5">Runtime</label>
-							<select id="webRuntime" bind:value={runtime} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
+						<div class="col-span-2 md:col-span-1">
+							<label for="webRuntime" class="block text-sm font-medium text-gray-700 mb-1.5">App Framework / Runtime</label>
+							<select id="webRuntime" bind:value={runtime} onchange={() => {
+								if (runtime === 'Node.js') { buildCommand = 'npm install'; startCommand = 'npm start'; }
+								else if (runtime === 'Python') { buildCommand = 'pip install -r requirements.txt'; startCommand = 'python main.py'; }
+								else if (runtime === 'Go') { buildCommand = 'go build -o server .'; startCommand = './server'; }
+							}} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
 								<option>Node.js</option>
 								<option>Python</option>
-								<option>Docker</option>
 								<option>Go</option>
 							</select>
-						</div>
-						<div>
-							<label for="webBuildCmd" class="block text-sm font-medium text-gray-700 mb-1.5">Build Command</label>
-							<input id="webBuildCmd" type="text" bind:value={buildCommand} class="w-full font-mono text-sm bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
-						</div>
-						<div class="col-span-2">
-							<label for="webStartCmd" class="block text-sm font-medium text-gray-700 mb-1.5">Start Command</label>
-							<input id="webStartCmd" type="text" bind:value={startCommand} class="w-full font-mono text-sm bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
 						</div>
 					</div>
 				{:else if selectedType.id === 'static'}
 					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-						<div>
-							<label for="staticBuildCmd" class="block text-sm font-medium text-gray-700 mb-1.5">Build Command</label>
-							<input id="staticBuildCmd" type="text" bind:value={buildCommand} class="w-full font-mono text-sm bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
-						</div>
-						<div>
-							<label for="staticPublishDir" class="block text-sm font-medium text-gray-700 mb-1.5">Publish Directory</label>
-							<input id="staticPublishDir" type="text" bind:value={publishDir} class="w-full font-mono text-sm bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
+						<div class="col-span-2 md:col-span-1">
+							<label for="staticFramework" class="block text-sm font-medium text-gray-700 mb-1.5">Static Framework</label>
+							<select id="staticFramework" onchange={(e) => {
+								const val = (e.target as HTMLSelectElement).value;
+								if (val === 'React / Vite') { buildCommand = 'npm ci && npm run build'; publishDir = 'dist'; }
+								else if (val === 'SvelteKit') { buildCommand = 'npm ci && npm run build'; publishDir = 'build'; }
+								else if (val === 'Next.js Export') { buildCommand = 'npm ci && npm run build'; publishDir = 'out'; }
+								else if (val === 'Vanilla HTML') { buildCommand = ''; publishDir = '.'; }
+							}} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
+								<option>React / Vite</option>
+								<option>SvelteKit</option>
+								<option>Next.js Export</option>
+								<option>Vanilla HTML</option>
+							</select>
 						</div>
 					</div>
 				{:else if selectedType.id === 'postgres'}
@@ -460,11 +463,19 @@
 					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
 						<div>
 							<label for="cronSchedule" class="block text-sm font-medium text-gray-700 mb-1.5">Cron Schedule</label>
-							<input id="cronSchedule" type="text" bind:value={cronSchedule} class="w-full font-mono text-sm bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
+							<select id="cronSchedule" bind:value={cronSchedule} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
+								<option value="* * * * *">Every minute (* * * * *)</option>
+								<option value="0 * * * *">Hourly (0 * * * *)</option>
+								<option value="0 0 * * *">Daily at Midnight (0 0 * * *)</option>
+							</select>
 						</div>
 						<div>
-							<label for="cronCmd" class="block text-sm font-medium text-gray-700 mb-1.5">Execute Command</label>
-							<input id="cronCmd" type="text" bind:value={cronCommand} class="w-full font-mono text-sm bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
+							<label for="cronTask" class="block text-sm font-medium text-gray-700 mb-1.5">Preset Task</label>
+							<select id="cronTask" bind:value={cronTask} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
+								<option>Sync Users</option>
+								<option>Cleanup Cache</option>
+								<option>Generate Reports</option>
+							</select>
 						</div>
 					</div>
 				{/if}
