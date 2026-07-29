@@ -22,6 +22,12 @@ func HandleAppProxy(dockClient *Client) http.HandlerFunc {
 			return
 		}
 
+		// Enforce trailing slash on project root to fix relative asset paths (e.g. ./assets/js)
+		if len(parts) == 1 && !strings.HasSuffix(r.URL.Path, "/") {
+			http.Redirect(w, r, "/app/"+projectName+"/", http.StatusMovedPermanently)
+			return
+		}
+
 		// Find running container matching devpnl-<project>-*
 		containers, err := dockClient.ListContainers(r.Context())
 		if err != nil {
