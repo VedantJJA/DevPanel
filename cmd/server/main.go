@@ -183,10 +183,30 @@ func main() {
 	apiMux.HandleFunc("POST /api/projects/{id}/services/{name}/restart", docker.HandleRestartService(database, dockClient))
 	apiMux.HandleFunc("GET /api/projects/{id}/services/{name}/logs", docker.HandleServiceLogsSSE(dockClient))
 	apiMux.HandleFunc("GET /api/projects/{id}/logs/history", docker.HandleProjectLogsHistory())
+	apiMux.HandleFunc("DELETE /api/projects/{id}/logs", docker.HandleClearProjectLogs())
+	apiMux.HandleFunc("DELETE /api/projects/{id}", docker.HandleDeleteProject(database, dockClient))
 	apiMux.HandleFunc("/api/settings", docker.HandleSettings(database))
 
-	// Mount protected API multiplexer under /api/ with middleware
-	mux.Handle("/api/", docker.AuthMiddleware(database, apiMux.ServeHTTP))
+	// Mount protected API multiplexer under /api/ with smart Referer-based routing.
+	// If the request originated from a hosted app page (/app/<name>/), redirect
+	// to the app-proxy path so the backend container handles it. Otherwise fall
+	// through to the DevPanel auth middleware + API handlers.
+	apiHandler := docker.AuthMiddleware(database, apiMux.ServeHTTP)
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		referer := r.Header.Get("Referer")
+		if referer != "" {
+			refParts := strings.Split(referer, "/app/")
+			if len(refParts) > 1 {
+				projectName := strings.Split(refParts[1], "/")[0]
+				if projectName != "" {
+					// This API call came from a hosted app — proxy it to the app's backend
+					http.Redirect(w, r, "/app/"+projectName+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+					return
+				}
+			}
+		}
+		apiHandler.ServeHTTP(w, r)
+	})
 
 	// Path-based application hosting route: http://140.245.116.79/app/<project-name>/
 	mux.HandleFunc("/app/", docker.HandleAppProxy(dockClient))

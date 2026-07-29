@@ -166,6 +166,70 @@ func HandleGetProject(database *db.DB) http.HandlerFunc {
 	}
 }
 
+// HandleDeleteProject — DELETE /api/projects/{id}
+// Stops & removes all containers, deletes DB records, and purges build logs.
+func HandleDeleteProject(database *db.DB, dockClient *Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: "Use DELETE"})
+			return
+		}
+		projectID := r.PathValue("id")
+		if projectID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: "project id required"})
+			return
+		}
+
+		// Stop and remove all containers for this project
+		svcs, _ := database.ListServices(r.Context(), projectID)
+		projectSlug := strings.TrimPrefix(projectID, "bp-")
+		for _, svc := range svcs {
+			containerName := fmt.Sprintf("devpnl-%s-%s", projectSlug, svc.Name)
+			_ = dockClient.StopContainer(r.Context(), containerName)
+			_ = dockClient.RemoveContainer(r.Context(), containerName, true)
+		}
+
+		// Purge build logs from memory and disk
+		globalLogBroadcaster.ClearLogs(projectID)
+
+		// Delete DB records (services, deployments, blueprint)
+		if err := database.DeleteBlueprint(r.Context(), projectID); err != nil {
+			log.Printf("api: delete project %s: %v", projectID, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"deleted": projectID})
+	}
+}
+
+// HandleClearProjectLogs — DELETE /api/projects/{id}/logs
+// Purges only the persisted log history without affecting containers or DB.
+func HandleClearProjectLogs() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: "Use DELETE"})
+			return
+		}
+		projectID := r.PathValue("id")
+		if projectID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: "project id required"})
+			return
+		}
+		globalLogBroadcaster.ClearLogs(projectID)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]bool{"cleared": true})
+	}
+}
+
 // HandleUpdateService — PATCH /api/projects/{id}/services/{name}
 func HandleUpdateService(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

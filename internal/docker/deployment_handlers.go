@@ -156,6 +156,17 @@ func (b *LogBroadcaster) Subscribe(projectID string) (chan LogEvent, func()) {
 	return ch, unsubscribe
 }
 
+// ClearLogs purges in-memory history and deletes the persisted log file for a project.
+func (b *LogBroadcaster) ClearLogs(projectID string) {
+	b.mu.Lock()
+	delete(b.history, projectID)
+	delete(b.historyLoaded, projectID)
+	b.mu.Unlock()
+
+	// Delete the on-disk log file
+	_ = os.Remove(getLogFilePath(projectID))
+}
+
 // HandleTriggerDeployment catches POST /api/deployments/trigger
 func HandleTriggerDeployment(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

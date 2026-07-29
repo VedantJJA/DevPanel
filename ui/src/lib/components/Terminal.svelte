@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
 	import type { LogEvent } from '../types';
 
 	interface Props {
@@ -12,9 +11,16 @@
 	let { projectId, serviceFilter = '', title = 'Live Deployment & Build Logs', sourceUrl = '' }: Props = $props();
 
 	let logs = $state<LogEvent[]>([]);
+	// Logs recorded after this timestamp are shown; null means show all
+	let clearCutoff = $state<string | null>(null);
 	let sseConnected = $state(false);
 	let terminalContainer: HTMLDivElement | null = $state(null);
 	let eventSource: EventSource | null = null;
+
+	// Only logs newer than the cutoff are visible
+	let visibleLogs = $derived(
+		clearCutoff ? logs.filter(l => l.timestamp > clearCutoff!) : logs
+	);
 
 	function scrollToBottom() {
 		if (terminalContainer) {
@@ -22,9 +28,24 @@
 		}
 	}
 
+	async function handleClear() {
+		// Record cutoff as current time — hides all existing logs immediately
+		clearCutoff = new Date().toISOString();
+		// Also tell the server to purge its persisted history
+		try {
+			await fetch(`/api/projects/${encodeURIComponent(projectId)}/logs`, {
+				method: 'DELETE',
+				credentials: 'include'
+			});
+		} catch (_) {
+			// ignore — UI-side cutoff still works even if server call fails
+		}
+	}
+
 	$effect(() => {
 		if (eventSource) eventSource.close();
 		logs = [];
+		clearCutoff = null;
 		sseConnected = false;
 
 		let sseUrl = sourceUrl;
@@ -86,18 +107,23 @@
 		</div>
 
 		<div class="flex items-center gap-3">
-			<button onclick={() => (logs = [])} class="text-neutral-400 hover:text-neutral-200 text-xs">Clear</button>
+			{#if clearCutoff}
+				<span class="text-neutral-600 text-[10px]">Showing logs after {clearCutoff.slice(11,19)}</span>
+			{/if}
+			<button onclick={handleClear} class="text-neutral-400 hover:text-neutral-200 text-xs transition-colors">Clear</button>
 			<span class="w-2 h-2 rounded-full {sseConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}"></span>
 		</div>
 	</div>
 
 	<!-- Log Viewport -->
 	<div bind:this={terminalContainer} class="flex-1 p-4 overflow-y-auto space-y-1.5 scroll-smooth">
-		{#if logs.length === 0}
-			<div class="text-neutral-500 italic py-4">Connecting to real-time build and deploy SSE stream...</div>
+		{#if visibleLogs.length === 0}
+			<div class="text-neutral-500 italic py-4">
+				{clearCutoff ? 'No new logs since clearing. Waiting for new events...' : 'Connecting to real-time build and deploy SSE stream...'}
+			</div>
 		{/if}
 
-		{#each logs as item, i (i)}
+		{#each visibleLogs as item, i (i)}
 			<div class="flex items-start gap-3 leading-relaxed">
 				<span class="text-neutral-600 text-[11px] shrink-0">{item.timestamp.slice(11, 19)}</span>
 				<span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-bold shrink-0 {item.stage === 'build'
@@ -106,6 +132,8 @@
 					? 'bg-purple-950 text-purple-400 border border-purple-800'
 					: item.stage === 'clone'
 					? 'bg-amber-950 text-amber-400 border border-amber-800'
+					: item.stage === 'runtime'
+					? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
 					: 'bg-neutral-800 text-neutral-300'}">
 					{item.stage}
 				</span>
