@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/VedantJJA/devpnl/internal/db"
 )
 
 // ScanService is the per-service shape returned to the wizard UI.
@@ -33,7 +35,7 @@ type ScanResult struct {
 
 // HandleScanRepo scans a repository's devpanel.yaml and returns a structured result
 // WITHOUT deploying. Used by wizard step 1.
-func HandleScanRepo() http.HandlerFunc {
+func HandleScanRepo(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodPost {
@@ -58,7 +60,7 @@ func HandleScanRepo() http.HandlerFunc {
 		result := ScanResult{RepoURL: req.RepoURL, Project: req.AppName}
 
 		// 1. Fetch devpanel.yaml (raw API first, shallow-clone fallback)
-		yamlBytes, err := fetchRawBlueprintContent(r.Context(), req.RepoURL)
+		yamlBytes, err := fetchRawBlueprintContent(r.Context(), database, req.RepoURL)
 		if err != nil {
 			yamlBytes, err = fetchBlueprintViaShallowClone(r.Context(), req.RepoURL)
 			if err != nil {

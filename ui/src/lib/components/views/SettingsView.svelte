@@ -2,28 +2,34 @@
 	interface Props {
 		autoRefreshRateSec: number;
 		githubUsername: string;
+		githubToken: string;
 		actionLoading: string | null;
 		onSetAutoRefresh: (rate: number) => void;
 		onSetGithubUsername: (username: string) => void;
+		onSetGithubToken: (token: string) => void;
 		onPruneSystem: () => void;
 	}
 
 	let {
 		autoRefreshRateSec,
 		githubUsername,
+		githubToken,
 		actionLoading,
 		onSetAutoRefresh,
 		onSetGithubUsername,
+		onSetGithubToken,
 		onPruneSystem
 	}: Props = $props();
 
 	let usernameInput = $state(githubUsername);
+	let tokenInput = $state(githubToken);
 	let saveMessage = $state<string | null>(null);
 
 	function handleSaveUsername(e: Event) {
 		e.preventDefault();
 		onSetGithubUsername(usernameInput.trim());
-		saveMessage = 'GitHub username saved successfully!';
+		onSetGithubToken(tokenInput.trim());
+		saveMessage = 'GitHub configuration saved successfully!';
 		setTimeout(() => (saveMessage = null), 3000);
 	}
 </script>
@@ -53,15 +59,27 @@
 			</div>
 
 			<form onsubmit={handleSaveUsername} class="space-y-4 max-w-xl">
-				<div>
-					<label for="ghUsername" class="block text-sm font-medium text-gray-700 mb-1.5">GitHub Username</label>
-					<input
-						id="ghUsername"
-						type="text"
-						bind:value={usernameInput}
-						placeholder="e.g. VedantJJA"
-						class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm"
-					/>
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+					<div>
+						<label for="ghUsername" class="block text-sm font-medium text-gray-700 mb-1.5">GitHub Username</label>
+						<input
+							id="ghUsername"
+							type="text"
+							bind:value={usernameInput}
+							placeholder="e.g. VedantJJA"
+							class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm"
+						/>
+					</div>
+					<div>
+						<label for="ghToken" class="block text-sm font-medium text-gray-700 mb-1.5">Personal Access Token (optional)</label>
+						<input
+							id="ghToken"
+							type="password"
+							bind:value={tokenInput}
+							placeholder="ghp_..."
+							class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm"
+						/>
+					</div>
 				</div>
 				<button
 					type="submit"

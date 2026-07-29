@@ -14,32 +14,41 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"time"
 )
 
-// Client talks to the Docker daemon over its Unix socket.
+// Client talks to the Docker daemon over its Unix socket or named pipe.
 type Client struct {
 	http *http.Client
-	host string // Unix socket path
+	host string // socket path or named pipe path
 }
 
-// NewClient creates a Docker client that dials the given Unix socket.
-// Pass "" to use the default /var/run/docker.sock.
+// NewClient creates a Docker client that dials the Docker daemon.
+// On Windows it uses the named pipe; on Linux/macOS it uses the Unix socket.
+// Pass "" to use the OS-appropriate default.
 func NewClient(socketPath string) *Client {
-	if socketPath == "" {
-		socketPath = "/var/run/docker.sock"
+	if socketPath == "" || socketPath == "/var/run/docker.sock" {
+		if runtime.GOOS == "windows" {
+			socketPath = `//./pipe/docker_engine`
+		} else {
+			socketPath = "/var/run/docker.sock"
+		}
 	}
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			return dialDocker(ctx, socketPath)
 		},
 		MaxIdleConns:    5,
 		IdleConnTimeout: 30 * time.Second,
 	}
+
+	log.Printf("docker: client initialized (host=%s, os=%s)", socketPath, runtime.GOOS)
 
 	return &Client{
 		http: &http.Client{Transport: transport},

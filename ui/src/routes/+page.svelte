@@ -28,6 +28,7 @@
 	let pingMs = $state<number | null>(null);
 	let autoRefreshRateSec = $state(5);
 	let githubUsername = $state('');
+	let githubToken = $state('');
 	let showEnvValues = $state(false);
 
 	let containers = $state<Container[]>([]);
@@ -271,8 +272,19 @@
 		}
 	}
 
-	onMount(() => {
-		if (typeof window !== 'undefined') {
+	onMount(async () => {
+		try {
+			const res = await fetch('/api/settings');
+			if (res.ok) {
+				const settings = await res.json();
+				if (settings.github_username) githubUsername = settings.github_username;
+				if (settings.github_token) githubToken = settings.github_token;
+			}
+		} catch (e) {
+			console.error('Failed to fetch settings:', e);
+		}
+		
+		if (typeof window !== 'undefined' && !githubUsername) {
 			githubUsername = localStorage.getItem('devpnl_gh_username') || '';
 		}
 		fetchData();
@@ -359,6 +371,7 @@
 				<SettingsView
 					{autoRefreshRateSec}
 					{githubUsername}
+					{githubToken}
 					{actionLoading}
 					onSetAutoRefresh={updateRefreshRate}
 					onSetGithubUsername={(username: string) => {
@@ -366,6 +379,19 @@
 						if (typeof window !== 'undefined') {
 							localStorage.setItem('devpnl_gh_username', username);
 						}
+						fetch('/api/settings', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ github_username: username })
+						});
+					}}
+					onSetGithubToken={(token: string) => {
+						githubToken = token;
+						fetch('/api/settings', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ github_token: token })
+						});
 					}}
 					onPruneSystem={handlePruneSystem}
 				/>

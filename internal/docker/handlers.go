@@ -322,8 +322,10 @@ func HandlePruneSystem(dockClient *Client) http.HandlerFunc {
 	}
 }
 
-// HandleListUserRepos fetches public GitHub repositories for a given username.
-func HandleListUserRepos() http.HandlerFunc {
+// HandleListUserRepos fetches GitHub repositories for a given username.
+// If a github_token is stored in settings, it authenticates and returns private repos too.
+// Without a token, it falls back to the public API.
+func HandleListUserRepos(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		username := strings.TrimSpace(r.URL.Query().Get("username"))
@@ -333,7 +335,24 @@ func HandleListUserRepos() http.HandlerFunc {
 			return
 		}
 
-		reqURL := fmt.Sprintf("https://api.github.com/users/%s/repos?sort=updated&per_page=30", username)
+		// Check for stored GitHub token
+		var ghToken string
+		if database != nil {
+			if tok, err := database.GetSetting(r.Context(), "github_token"); err == nil && tok != "" {
+				ghToken = tok
+			}
+		}
+
+		// Build the API request URL
+		var reqURL string
+		if ghToken != "" {
+			// Authenticated: use search for user's repos (includes private)
+			reqURL = fmt.Sprintf("https://api.github.com/users/%s/repos?sort=updated&per_page=50&type=all", username)
+		} else {
+			// Public only
+			reqURL = fmt.Sprintf("https://api.github.com/users/%s/repos?sort=updated&per_page=30", username)
+		}
+
 		req, err := http.NewRequestWithContext(r.Context(), "GET", reqURL, nil)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -341,6 +360,10 @@ func HandleListUserRepos() http.HandlerFunc {
 			return
 		}
 		req.Header.Set("User-Agent", "DevPnl-App")
+		req.Header.Set("Accept", "application/vnd.github+json")
+		if ghToken != "" {
+			req.Header.Set("Authorization", "Bearer "+ghToken)
+		}
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -374,12 +397,13 @@ func HandleListUserRepos() http.HandlerFunc {
 		}
 
 		type RepoDTO struct {
-			ID       int    `json:"id"`
-			Name     string `json:"name"`
-			FullName string `json:"full_name"`
-			URL      string `json:"url"`
-			Private  bool   `json:"private"`
-			Updated  string `json:"updated"`
+			ID          int    `json:"id"`
+			Name        string `json:"name"`
+			FullName    string `json:"full_name"`
+			URL         string `json:"url"`
+			Private     bool   `json:"private"`
+			Updated     string `json:"updated"`
+			Description string `json:"description"`
 		}
 
 		var dtoList []RepoDTO
@@ -389,16 +413,63 @@ func HandleListUserRepos() http.HandlerFunc {
 				updatedStr = updatedStr[:10]
 			}
 			dtoList = append(dtoList, RepoDTO{
-				ID:       repo.ID,
-				Name:     repo.Name,
-				FullName: repo.FullName,
-				URL:      repo.HTMLURL,
-				Private:  repo.Private,
-				Updated:  updatedStr,
+				ID:          repo.ID,
+				Name:        repo.Name,
+				FullName:    repo.FullName,
+				URL:         repo.HTMLURL,
+				Private:     repo.Private,
+				Updated:     updatedStr,
+				Description: repo.Description,
 			})
 		}
 
-		json.NewEncoder(w).Encode(map[string]interface{}{"repos": dtoList})
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"repos":         dtoList,
+			"authenticated": ghToken != "",
+		})
+	}
+}
+
+// HandleSettings handles GET and POST for /api/settings.
+// GET returns all settings. POST accepts a JSON object of key-value pairs to upsert.
+func HandleSettings(database *db.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodGet:
+			settings, err := database.GetAllSettings(r.Context())
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+				return
+			}
+			// Mask the token for security
+			if tok, ok := settings["github_token"]; ok && len(tok) > 8 {
+				settings["github_token"] = tok[:8] + "..." + tok[len(tok)-4:]
+			}
+			json.NewEncoder(w).Encode(settings)
+
+		case http.MethodPost:
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid JSON"})
+				return
+			}
+			for key, value := range body {
+				if err := database.SetSetting(r.Context(), key, value); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+					return
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: "Method not allowed"})
+		}
 	}
 }
 

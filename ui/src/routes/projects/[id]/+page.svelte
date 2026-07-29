@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/state';
-	import Terminal from '$lib/components/Terminal.svelte';
 	import EnvVarEditor from '$lib/components/EnvVarEditor.svelte';
+	import Terminal from '$lib/components/Terminal.svelte';
 	import { getProject, updateService, triggerDeploy, restartService } from '$lib/api';
 	import type { ProjectDetail, ServiceRecord } from '$lib/types';
 
@@ -15,7 +15,7 @@
 	let isSaving = $state(false);
 	let saveMessage = $state<string | null>(null);
 
-	// Metrics state
+	// Live Metrics State
 	let serviceMetrics = $state({
 		cpuPercent: 0,
 		memoryMb: 0,
@@ -99,248 +99,198 @@
 	});
 </script>
 
-<div class="flex h-screen bg-neutral-950 text-neutral-100 font-sans antialiased overflow-hidden">
-	{#if projectData}
-		<!-- Left Sidebar Service Navigation -->
-		<aside class="w-64 border-r border-neutral-800 bg-neutral-900/70 backdrop-blur-md flex flex-col justify-between p-4 shrink-0">
-			<div class="space-y-6">
-				<!-- Project Header -->
-				<div class="px-3 py-2 border-b border-neutral-800/80 pb-4">
-					<h2 class="font-bold text-base text-neutral-100 truncate font-mono" title={projectData.blueprint.name}>
-						{projectData.blueprint.name}
-					</h2>
-					<div class="flex items-center gap-2 mt-1">
-						<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider font-mono border {projectData.blueprint.status === 'active'
-							? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-							: 'bg-amber-500/10 text-amber-400 border-amber-500/20'}">
-							{projectData.blueprint.status}
-						</span>
-					</div>
-				</div>
+<div class="min-h-screen bg-gray-50 text-gray-900 font-sans flex flex-col antialiased">
+	<!-- Top Bar Header -->
+	<header class="border-b border-gray-200 bg-white py-4 px-6 md:px-10 flex items-center justify-between shadow-sm">
+		<div class="flex items-center gap-3">
+			<a href="/" class="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
+				<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+			</a>
+			<div>
+				<h1 class="text-xl font-bold text-gray-900 tracking-tight flex items-center gap-2">
+					<span>{projectData?.blueprint.name || projectId}</span>
+					<span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-200 uppercase">
+						{projectData?.blueprint.status || 'Active'}
+					</span>
+				</h1>
+				<p class="text-xs text-gray-500 font-mono mt-0.5">{projectData?.blueprint.repo_url || 'Application Stack'}</p>
+			</div>
+		</div>
 
-				<!-- Service Tabs Navigation -->
-				<div class="space-y-1">
-					<span class="text-[10px] uppercase font-bold text-neutral-500 tracking-wider px-3 block mb-2">Services</span>
+		<div class="flex items-center gap-3">
+			{#if projectData && projectData.services[activeServiceIdx]}
+				<button
+					type="button"
+					onclick={() => handleRestart(projectData!.services[activeServiceIdx].name)}
+					class="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+				>
+					↻ Restart Container
+				</button>
+			{/if}
+			<button
+				type="button"
+				onclick={() => triggerDeploy(projectId)}
+				class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+			>
+				Manual Redeploy
+			</button>
+		</div>
+	</header>
+
+	<!-- Main Workspace -->
+	<main class="flex-1 p-6 md:p-10 max-w-7xl mx-auto w-full space-y-6">
+		{#if saveMessage}
+			<div class="p-4 rounded-xl border text-sm flex items-center justify-between shadow-sm {saveMessage.includes('Failed') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}">
+				<span>{saveMessage}</span>
+				<button type="button" onclick={() => (saveMessage = null)} class="font-bold">✕</button>
+			</div>
+		{/if}
+
+		{#if projectData}
+			<!-- Multi-service tabs if app defines multiple services -->
+			{#if projectData.services.length > 1}
+				<div class="flex border-b border-gray-200 gap-2">
 					{#each projectData.services as svc, idx}
 						<button
-							onclick={() => {
-								activeServiceIdx = idx;
-								fetchServiceMetrics();
-							}}
-							class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-mono font-medium transition-all {activeServiceIdx === idx
-								? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-sm'
-								: 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/50'}"
+							type="button"
+							onclick={() => { activeServiceIdx = idx; fetchServiceMetrics(); }}
+							class="px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 {activeServiceIdx === idx
+								? 'border-blue-600 text-blue-600'
+								: 'border-transparent text-gray-500 hover:text-gray-800'}"
 						>
-							<div class="flex items-center gap-2 truncate">
-								<span class="w-2 h-2 rounded-full {svc.type === 'static' ? 'bg-sky-400' : svc.type === 'web' ? 'bg-purple-400' : 'bg-emerald-400'}"></span>
-								<span class="truncate">{svc.name}</span>
-							</div>
-							<span class="text-[10px] uppercase text-neutral-500">{svc.type}</span>
+							<span>{svc.name}</span>
+							<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 border text-gray-600 uppercase">{svc.type}</span>
 						</button>
 					{/each}
 				</div>
-			</div>
+			{/if}
 
-			<div class="pt-4 border-t border-neutral-800">
-				<a href="/" class="text-xs font-medium text-neutral-400 hover:text-emerald-400 transition-colors flex items-center gap-2">
-					← Back to Dashboard
-				</a>
-			</div>
-		</aside>
-
-		<!-- Main Workspace for Selected Service -->
-		{#if projectData.services[activeServiceIdx]}
 			{@const currentSvc = projectData.services[activeServiceIdx]}
-			<main class="flex-1 flex flex-col min-w-0 bg-neutral-950 p-6 md:p-8 overflow-y-auto">
-				<!-- Top Header -->
-				<div class="flex items-center justify-between border-b border-neutral-800/80 pb-4 mb-6">
+
+			<!-- View Tabs -->
+			<div class="flex border-b border-gray-200 gap-6 text-sm font-medium text-gray-500">
+				<button
+					type="button"
+					onclick={() => (activeSubTab = 'logs')}
+					class="py-3 border-b-2 transition-colors flex items-center gap-2 {activeSubTab === 'logs' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent hover:text-gray-900'}"
+				>
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+					<span>Logs Stream</span>
+				</button>
+
+				<button
+					type="button"
+					onclick={() => (activeSubTab = 'environment')}
+					class="py-3 border-b-2 transition-colors flex items-center gap-2 {activeSubTab === 'environment' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent hover:text-gray-900'}"
+				>
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/></svg>
+					<span>Environment Variables</span>
+				</button>
+
+				<button
+					type="button"
+					onclick={() => (activeSubTab = 'metrics')}
+					class="py-3 border-b-2 transition-colors flex items-center gap-2 {activeSubTab === 'metrics' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent hover:text-gray-900'}"
+				>
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+					<span>Metrics Telemetry</span>
+				</button>
+
+				<button
+					type="button"
+					onclick={() => (activeSubTab = 'settings')}
+					class="py-3 border-b-2 transition-colors flex items-center gap-2 {activeSubTab === 'settings' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent hover:text-gray-900'}"
+				>
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+					<span>Build & Run Settings</span>
+				</button>
+			</div>
+
+			<!-- Tab Content Areas -->
+			{#if activeSubTab === 'logs'}
+				<div class="h-[550px]">
+					<Terminal {projectId} serviceFilter={currentSvc?.name} title={`Live Terminal Stream for ${currentSvc?.name}`} />
+				</div>
+			{:else if activeSubTab === 'environment'}
+				<div class="bg-white border border-gray-200 rounded-xl p-6 shadow-sm space-y-6">
 					<div>
-						<div class="flex items-center gap-3">
-							<h1 class="text-2xl font-bold text-neutral-100 font-mono">{currentSvc.name}</h1>
-							<span class="px-2.5 py-0.5 rounded-full text-xs font-mono uppercase font-bold border border-neutral-800 bg-neutral-900 text-neutral-300">
-								{currentSvc.type}
-							</span>
-						</div>
-						<p class="text-xs text-neutral-400 font-mono mt-1">
-							Hosted URL: <a href="/app/{projectData.blueprint.name.toLowerCase()}" target="_blank" class="text-emerald-400 hover:underline">{typeof window !== 'undefined' ? window.location.origin : ''}/app/{projectData.blueprint.name.toLowerCase()} ↗</a>
-						</p>
+						<h3 class="text-lg font-semibold text-gray-900">Environment Variables ({currentSvc.name})</h3>
+						<p class="text-sm text-gray-500 mt-1">Configure environment variables for {currentSvc.name}.</p>
 					</div>
 
-					<div class="flex items-center gap-3">
+					<EnvVarEditor bind:envVars={currentSvc.env_vars} />
+
+					<div class="flex justify-end">
 						<button
-							onclick={() => handleRestart(currentSvc.name)}
-							class="px-3.5 py-2 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 text-xs font-mono transition-all"
+							type="button"
+							onclick={() => handleSaveService(currentSvc)}
+							disabled={isSaving}
+							class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
 						>
-							↻ Restart Container
-						</button>
-						<button
-							onclick={() => triggerDeploy(projectId)}
-							class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-lg"
-						>
-							Manual Redeploy
+							{isSaving ? 'Saving Environment...' : 'Save & Redeploy'}
 						</button>
 					</div>
 				</div>
-
-				<!-- Save Message Toast -->
-				{#if saveMessage}
-					<div class="p-4 rounded-xl bg-neutral-900 border border-neutral-800 text-emerald-400 text-xs font-mono mb-6 flex items-center justify-between">
-						<span>{saveMessage}</span>
-						<button onclick={() => (saveMessage = null)} class="text-neutral-400 hover:text-neutral-200">✕</button>
+			{:else if activeSubTab === 'metrics'}
+				<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+					<div class="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+						<span class="text-sm font-medium text-gray-500">Service Status</span>
+						<p class="text-2xl font-bold text-gray-900 mt-2">{serviceMetrics.status}</p>
 					</div>
-				{/if}
-
-				<!-- Subtab Selector -->
-				<div class="flex items-center gap-2 border-b border-neutral-800/80 pb-3 mb-6">
-					<button
-						onclick={() => (activeSubTab = 'logs')}
-						class="px-4 py-2 rounded-xl text-xs font-mono font-bold transition-all {activeSubTab === 'logs'
-							? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-							: 'text-neutral-400 hover:text-neutral-200'}"
-					>
-						Logs Stream
-					</button>
-					<button
-						onclick={() => (activeSubTab = 'environment')}
-						class="px-4 py-2 rounded-xl text-xs font-mono font-bold transition-all {activeSubTab === 'environment'
-							? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-							: 'text-neutral-400 hover:text-neutral-200'}"
-					>
-						Environment Variables
-					</button>
-					<button
-						onclick={() => (activeSubTab = 'settings')}
-						class="px-4 py-2 rounded-xl text-xs font-mono font-bold transition-all {activeSubTab === 'settings'
-							? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-							: 'text-neutral-400 hover:text-neutral-200'}"
-					>
-						Build & Run Settings
-					</button>
-					<button
-						onclick={() => (activeSubTab = 'metrics')}
-						class="px-4 py-2 rounded-xl text-xs font-mono font-bold transition-all {activeSubTab === 'metrics'
-							? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-							: 'text-neutral-400 hover:text-neutral-200'}"
-					>
-						Metrics
-					</button>
+					<div class="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+						<span class="text-sm font-medium text-gray-500">CPU Usage</span>
+						<p class="text-2xl font-bold text-gray-900 mt-2">{serviceMetrics.cpuPercent}%</p>
+					</div>
+					<div class="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+						<span class="text-sm font-medium text-gray-500">Memory Usage</span>
+						<p class="text-2xl font-bold text-gray-900 mt-2">{serviceMetrics.memoryMb} MB</p>
+					</div>
 				</div>
-
-				<!-- SUBTAB 1: Service Filtered Logs -->
-				{#if activeSubTab === 'logs'}
-					<div class="flex-1 min-h-[450px]">
-						<Terminal projectId={projectId} serviceFilter={currentSvc.name} title={`Live Logs for ${currentSvc.name}`} />
+			{:else if activeSubTab === 'settings'}
+				<div class="bg-white border border-gray-200 rounded-xl p-6 md:p-8 shadow-sm space-y-6 max-w-3xl">
+					<div>
+						<h3 class="text-lg font-semibold text-gray-900">Service Build & Runtime Settings</h3>
+						<p class="text-sm text-gray-500 mt-1">Edit commands and container target port for {currentSvc.name}.</p>
 					</div>
-				{/if}
 
-				<!-- SUBTAB 2: Environment Variables -->
-				{#if activeSubTab === 'environment'}
-					<div class="max-w-3xl space-y-6">
-						<div class="p-6 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-4">
-							<h3 class="text-base font-bold text-neutral-100">Environment Variables ({currentSvc.name})</h3>
-							<EnvVarEditor bind:envVars={currentSvc.env_vars} />
+					<div class="space-y-4">
+						<div>
+							<label for="svcPort" class="block text-sm font-medium text-gray-700 mb-1.5">Target Container Port</label>
+							<input id="svcPort" type="number" bind:value={currentSvc.port} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 font-mono text-sm shadow-sm" />
 						</div>
 
-						<div class="flex justify-end">
+						<div>
+							<label for="svcBuildCmd" class="block text-sm font-medium text-gray-700 mb-1.5">Build Command</label>
+							<input id="svcBuildCmd" type="text" bind:value={currentSvc.build_command} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 font-mono text-sm shadow-sm" />
+						</div>
+
+						<div>
+							<label for="svcStartCmd" class="block text-sm font-medium text-gray-700 mb-1.5">Start / Execute Command</label>
+							<input id="svcStartCmd" type="text" bind:value={currentSvc.start_command} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 font-mono text-sm shadow-sm" />
+						</div>
+
+						<div>
+							<label for="svcDomain" class="block text-sm font-medium text-gray-700 mb-1.5">Custom Routing Domain</label>
+							<input id="svcDomain" type="text" bind:value={currentSvc.custom_domain} placeholder="e.g. app.example.com" class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 text-sm shadow-sm" />
+						</div>
+
+						<div class="pt-4 flex justify-end">
 							<button
+								type="button"
 								onclick={() => handleSaveService(currentSvc)}
 								disabled={isSaving}
-								class="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all shadow-lg disabled:opacity-50"
+								class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
 							>
-								{isSaving ? 'Saving...' : 'Save & Redeploy'}
+								{isSaving ? 'Saving...' : 'Save Service Settings'}
 							</button>
 						</div>
 					</div>
-				{/if}
-
-				<!-- SUBTAB 3: Settings -->
-				{#if activeSubTab === 'settings'}
-					<div class="max-w-3xl space-y-6">
-						<div class="p-6 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-4">
-							<h3 class="text-base font-bold text-neutral-100 font-mono">Service Configuration ({currentSvc.name})</h3>
-
-							<div class="grid grid-cols-2 gap-4 text-xs font-mono">
-								<div class="space-y-1">
-									<label for="portInput" class="text-neutral-400 block">Exposed Port</label>
-									<input
-										id="portInput"
-										type="number"
-										bind:value={currentSvc.port}
-										class="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-xl text-neutral-100"
-									/>
-								</div>
-
-								<div class="space-y-1">
-									<label for="domInput" class="text-neutral-400 block">Custom Domain</label>
-									<input
-										id="domInput"
-										type="text"
-										bind:value={currentSvc.custom_domain}
-										placeholder="api.example.com"
-										class="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-xl text-neutral-100"
-									/>
-								</div>
-							</div>
-
-							<div class="space-y-1 pt-2">
-								<label for="bCmd" class="text-neutral-400 block text-xs font-mono">Build Command</label>
-								<input
-									id="bCmd"
-									type="text"
-									bind:value={currentSvc.build_command}
-									class="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-xl text-neutral-100 text-xs font-mono"
-								/>
-							</div>
-
-							<div class="space-y-1 pt-2">
-								<label for="rCmd" class="text-neutral-400 block text-xs font-mono">Start Command</label>
-								<input
-									id="rCmd"
-									type="text"
-									bind:value={currentSvc.start_command}
-									class="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-xl text-neutral-100 text-xs font-mono"
-								/>
-							</div>
-						</div>
-
-						<div class="flex justify-end">
-							<button
-								onclick={() => handleSaveService(currentSvc)}
-								disabled={isSaving}
-								class="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all shadow-lg disabled:opacity-50"
-							>
-								{isSaving ? 'Saving...' : 'Save Settings'}
-							</button>
-						</div>
-					</div>
-				{/if}
-
-				<!-- SUBTAB 4: Metrics -->
-				{#if activeSubTab === 'metrics'}
-					<div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl">
-						<div class="p-5 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-2">
-							<span class="text-xs text-neutral-400 font-medium">CPU Load ({currentSvc.name})</span>
-							<div class="text-2xl font-bold text-neutral-100 font-mono">{serviceMetrics.cpuPercent}%</div>
-						</div>
-
-						<div class="p-5 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-2">
-							<span class="text-xs text-neutral-400 font-medium">Memory Usage</span>
-							<div class="text-2xl font-bold text-neutral-100 font-mono">{serviceMetrics.memoryMb} MB</div>
-						</div>
-
-						<div class="p-5 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-2">
-							<span class="text-xs text-neutral-400 font-medium">Container Status</span>
-							<div class="text-2xl font-bold {serviceMetrics.status === 'Healthy' ? 'text-emerald-400' : 'text-amber-400'}">
-								{serviceMetrics.status}
-							</div>
-						</div>
-					</div>
-				{/if}
-			</main>
+				</div>
+			{/if}
+		{:else}
+			<div class="p-12 text-center text-gray-500 bg-white border border-gray-200 rounded-xl shadow-sm">
+				<p class="font-medium">Loading project details for {projectId}...</p>
+			</div>
 		{/if}
-	{:else}
-		<div class="flex-1 flex items-center justify-center text-neutral-500 font-mono text-xs">
-			Loading project details...
-		</div>
-	{/if}
+	</main>
 </div>

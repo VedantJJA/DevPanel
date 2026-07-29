@@ -239,20 +239,28 @@ func (o *BlueprintOrchestrator) buildServiceImage(ctx context.Context, serviceNa
 
 	fullDockerfilePath := filepath.Join(targetDir, dockerfilePath)
 
-	// If no Dockerfile exists and engine is "node" or "static", generate a default production Dockerfile
+	// If no Dockerfile exists, auto-generate production Dockerfile based on engine/type
 	if _, err := os.Stat(fullDockerfilePath); os.IsNotExist(err) {
 		if cfg.Build.Engine == "static" || cfg.Type == "static" {
 			log.Printf("blueprint: generating static Nginx Dockerfile for %s", serviceName)
 			if err := generateStaticDockerfile(fullDockerfilePath, cfg.Build.OutputDir, cfg.Build.Command); err != nil {
 				return fmt.Errorf("generate static dockerfile: %w", err)
 			}
-		} else if cfg.Build.Engine == "node" {
+		} else if cfg.Build.Engine == "python" || cfg.Type == "python" {
+			log.Printf("blueprint: generating Python Dockerfile for %s", serviceName)
+			if err := generatePythonDockerfile(fullDockerfilePath, cfg.Deploy.Command); err != nil {
+				return fmt.Errorf("generate python dockerfile: %w", err)
+			}
+		} else if cfg.Build.Engine == "go" || cfg.Type == "go" {
+			log.Printf("blueprint: generating Go Dockerfile for %s", serviceName)
+			if err := generateGoDockerfile(fullDockerfilePath, cfg.Build.Command); err != nil {
+				return fmt.Errorf("generate go dockerfile: %w", err)
+			}
+		} else {
 			log.Printf("blueprint: generating Node.js Dockerfile for %s", serviceName)
 			if err := generateNodeDockerfile(fullDockerfilePath); err != nil {
 				return fmt.Errorf("generate node dockerfile: %w", err)
 			}
-		} else {
-			return fmt.Errorf("Dockerfile not found at %s and engine %q is unsupported for auto-generation", fullDockerfilePath, cfg.Build.Engine)
 		}
 	}
 
@@ -499,6 +507,43 @@ COPY . .
 EXPOSE 8080
 CMD ["npm", "start"]
 `
+	return os.WriteFile(destPath, []byte(content), 0644)
+}
+
+// generatePythonDockerfile writes a production-ready Python Dockerfile.
+func generatePythonDockerfile(destPath string, startCmd string) error {
+	if startCmd == "" {
+		startCmd = "python app.py"
+	}
+	content := fmt.Sprintf(`FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt ./
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+COPY . .
+EXPOSE 8080
+CMD ["sh", "-c", "%s"]
+`, startCmd)
+	return os.WriteFile(destPath, []byte(content), 0644)
+}
+
+// generateGoDockerfile writes a production-ready multi-stage Go Dockerfile.
+func generateGoDockerfile(destPath string, buildCmd string) error {
+	if buildCmd == "" {
+		buildCmd = "go build -o server ."
+	}
+	content := fmt.Sprintf(`FROM golang:1.22-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download || true
+COPY . .
+RUN %s
+
+FROM alpine:latest
+WORKDIR /app
+COPY --from=builder /app/server ./server
+EXPOSE 8080
+CMD ["./server"]
+`, buildCmd)
 	return os.WriteFile(destPath, []byte(content), 0644)
 }
 

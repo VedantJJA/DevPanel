@@ -72,6 +72,7 @@ func (d *DB) migrate() error {
 		migrationBlueprints,
 		migrationServices,
 		migrationDeployments,
+		migrationSettings,
 	}
 
 	for i, m := range migrations {
@@ -176,6 +177,13 @@ CREATE TABLE IF NOT EXISTS deployments (
 );
 CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id);
 CREATE INDEX IF NOT EXISTS idx_deployments_status  ON deployments(status);
+`
+
+const migrationSettings = `
+CREATE TABLE IF NOT EXISTS settings (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL DEFAULT ''
+);
 `
 
 // --- Shared helpers ---------------------------------------------------------

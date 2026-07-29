@@ -77,9 +77,9 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 			json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid JSON"})
 			return
 		}
-		if req.AppName == "" || req.RepoURL == "" || req.Blueprint == nil {
+		if req.AppName == "" || req.Blueprint == nil {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "app_name, repo_url and blueprint are required"})
+			json.NewEncoder(w).Encode(ErrorResponse{Error: "app_name and blueprint are required"})
 			return
 		}
 		projectID := fmt.Sprintf("bp-%s", sanitizeName(req.AppName))
@@ -148,33 +148,20 @@ func HandleGetProject(database *db.DB) http.HandlerFunc {
 		if id == "" {
 			id = r.URL.Query().Get("id")
 		}
-		bps, err := database.ListBlueprints(r.Context())
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
-			return
-		}
-		var found db.BlueprintRecord
-		match := false
-		for _, b := range bps {
-			if b.ID == id {
-				found = b
-				match = true
-				break
-			}
-		}
-		if !match {
+		bp, err := database.GetBlueprint(r.Context(), id)
+		if err != nil || bp == nil {
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "project not found"})
+			json.NewEncoder(w).Encode(ErrorResponse{Error: fmt.Sprintf("project not found: %s", id)})
 			return
 		}
-		svcs, _ := database.ListServices(r.Context(), id)
-		deps, _ := database.ListDeployments(r.Context(), id)
+
+		svcs, _ := database.ListServices(r.Context(), bp.ID)
+		deps, _ := database.ListDeployments(r.Context(), bp.ID)
 		var latest *db.DeploymentRecord
 		if len(deps) > 0 {
 			latest = &deps[0]
 		}
-		json.NewEncoder(w).Encode(projectOut{Blueprint: found, Services: svcs, Latest: latest})
+		json.NewEncoder(w).Encode(projectOut{Blueprint: *bp, Services: svcs, Latest: latest})
 	}
 }
 
@@ -242,43 +229,74 @@ func HandleTriggerProjectDeploy(database *db.DB, dockClient *Client) http.Handle
 		}
 		projectID := r.PathValue("id")
 
-		bps, _ := database.ListBlueprints(r.Context())
-		var bpRec db.BlueprintRecord
-		found := false
-		for _, b := range bps {
-			if b.ID == projectID {
-				bpRec = b
-				found = true
-				break
-			}
-		}
-		if !found {
+		bpRec, err := database.GetBlueprint(r.Context(), projectID)
+		if err != nil || bpRec == nil {
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "project not found"})
+			json.NewEncoder(w).Encode(ErrorResponse{Error: fmt.Sprintf("project not found: %s", projectID)})
 			return
 		}
-		svcs, err := database.ListServices(r.Context(), projectID)
+		svcs, err := database.ListServices(r.Context(), bpRec.ID)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
 			return
 		}
 
-		yamlBytes, err := fetchRawBlueprintContent(r.Context(), bpRec.RepoURL)
-		if err != nil {
-			yamlBytes, err = fetchBlueprintViaShallowClone(r.Context(), bpRec.RepoURL)
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(ErrorResponse{Error: "Could not fetch devpanel.yaml from repo"})
+		var bp Blueprint
+
+		var yamlBytes []byte
+		var fetchErr error
+		if bpRec.RepoURL != "" {
+			yamlBytes, fetchErr = fetchRawBlueprintContent(r.Context(), database, bpRec.RepoURL)
+			if fetchErr != nil {
+				yamlBytes, fetchErr = fetchBlueprintViaShallowClone(r.Context(), bpRec.RepoURL)
+			}
+		} else {
+			fetchErr = fmt.Errorf("no repo_url")
+		}
+
+		if fetchErr == nil {
+			// devpanel.yaml found
+			if err := yamlUnmarshal(yamlBytes, &bp); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid blueprint YAML in repo"})
 				return
 			}
+		} else {
+			// Synthesize blueprint from DB services
+			bp.Version = "1.0"
+			bp.Services = make(map[string]ServiceConfig)
+			for _, s := range svcs {
+				sc := ServiceConfig{
+					Type: s.Type,
+					Deploy: DeployConfig{
+						Port:    s.Port,
+						Env:     s.EnvVars,
+						Command: s.StartCommand,
+					},
+					Build: BuildConfig{
+						Command: s.BuildCommand,
+					},
+				}
+				if s.Type == "postgres" {
+					sc.Image = "postgres:15-alpine"
+				} else if s.Type == "redis" {
+					sc.Image = "redis:7-alpine"
+				} else if s.Type == "static" {
+					sc.Build.Engine = "static"
+					sc.Build.OutputDir = "dist" // Default
+					sc.Source = SourceConfig{Directory: ".", Ref: "main"}
+				} else if s.Type == "web" {
+					sc.Build.Engine = "node"
+					sc.Source = SourceConfig{Directory: ".", Ref: "main"}
+				} else if s.Type == "cron" {
+					sc.Build.Engine = "python"
+					sc.Source = SourceConfig{Directory: ".", Ref: "main"}
+				}
+				bp.Services[s.Name] = sc
+			}
 		}
-		var bp Blueprint
-		if err := yamlUnmarshal(yamlBytes, &bp); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid blueprint YAML in repo"})
-			return
-		}
+
 		bp.Project = bpRec.Name
 		overrides := map[string]db.ServiceRecord{}
 		for _, s := range svcs {

@@ -70,7 +70,7 @@ func HandleValidateBlueprint(database *db.DB) http.HandlerFunc {
 		log.Printf("blueprint-val: fetching raw devpanel.yaml for %s without cloning entire repository", req.RepoURL)
 
 		// 1. Fetch ONLY the devpanel.yaml file content via raw HTTP APIs
-		yamlBytes, err := fetchRawBlueprintContent(r.Context(), req.RepoURL)
+		yamlBytes, err := fetchRawBlueprintContent(r.Context(), database, req.RepoURL)
 		if err != nil {
 			log.Printf("blueprint-val: raw fetch failed for %s: %v. Attempting lightweight sparse fallback...", req.RepoURL, err)
 
@@ -132,7 +132,7 @@ func HandleValidateBlueprint(database *db.DB) http.HandlerFunc {
 }
 
 // fetchRawBlueprintContent fetches only devpanel.yaml via raw HTTP API without cloning the repository.
-func fetchRawBlueprintContent(ctx context.Context, repoURL string) ([]byte, error) {
+func fetchRawBlueprintContent(ctx context.Context, database *db.DB, repoURL string) ([]byte, error) {
 	// Format GitHub raw URLs
 	// e.g. https://github.com/username/repo -> https://raw.githubusercontent.com/username/repo/main/devpanel.yaml
 	trimmed := strings.TrimSuffix(repoURL, ".git")
@@ -155,10 +155,20 @@ func fetchRawBlueprintContent(ctx context.Context, repoURL string) ([]byte, erro
 
 	client := &http.Client{Timeout: 8 * time.Second}
 
+	var ghToken string
+	if database != nil {
+		if tok, err := database.GetSetting(ctx, "github_token"); err == nil && tok != "" {
+			ghToken = tok
+		}
+	}
+
 	for _, urlStr := range candidateURLs {
 		req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 		if err != nil {
 			continue
+		}
+		if ghToken != "" {
+			req.Header.Set("Authorization", "Bearer "+ghToken)
 		}
 
 		resp, err := client.Do(req)
