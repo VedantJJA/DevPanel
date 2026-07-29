@@ -10,6 +10,7 @@
 	import ConfirmDeleteModal from '$lib/components/modals/ConfirmDeleteModal.svelte';
 	import ErrorAlertModal from '$lib/components/modals/ErrorAlertModal.svelte';
 	import LogStreamModal from '$lib/components/modals/LogStreamModal.svelte';
+	import DeploymentLogsModal from '$lib/components/modals/DeploymentLogsModal.svelte';
 	import Terminal from '$lib/components/Terminal.svelte';
 	import EnvVarEditor from '$lib/components/EnvVarEditor.svelte';
 	import DropdownMenu from '$lib/components/DropdownMenu.svelte';
@@ -24,6 +25,7 @@
 
 	let loading = $state(true);
 	let actionLoading = $state<string | null>(null);
+	let showDeployLogsFor = $state<string | null>(null);
 	let errorMessage = $state<string | null>(null);
 	let pingMs = $state<number | null>(null);
 	let autoRefreshRateSec = $state(5);
@@ -397,13 +399,18 @@
 				/>
 			{:else if selectedProject && selectedProject.services[selectedServiceIdx]}
 				{@const currentSvc = selectedProject.services[selectedServiceIdx]}
+				{@const currentSvcContainer = containers.find(c => c.name === `devpnl-${selectedProject.blueprint.name.toLowerCase()}-${currentSvc.name.toLowerCase()}`)}
+				{@const svcStatus = currentSvcContainer ? currentSvcContainer.status : 'stopped'}
+				
 				<div class="flex flex-col h-full bg-gray-50">
 					<!-- Detail Header -->
 					<header class="border-b border-gray-200 bg-white pt-6 pb-6 px-6 md:px-10 z-10 shadow-sm">
 						<div class="flex flex-col md:flex-row md:items-start justify-between gap-4">
 							<div class="flex items-start gap-4">
-								<div class="p-3 bg-blue-50 border border-blue-100 rounded-xl text-blue-600 shadow-sm">
+								<div class="p-3 bg-blue-50 border border-blue-100 rounded-xl text-blue-600 shadow-sm relative">
 									<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
+									<!-- Status Indicator -->
+									<div class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full border-2 border-white {svcStatus === 'running' ? 'bg-emerald-500' : svcStatus === 'restarting' ? 'bg-yellow-500' : 'bg-red-500'}" title={`Status: ${svcStatus}`}></div>
 								</div>
 								<div>
 									<div class="flex items-center gap-2 mb-1">
@@ -415,23 +422,42 @@
 										<span class="px-2.5 py-0.5 rounded-full text-xs font-medium border bg-green-100 text-green-700 border-green-200 uppercase">
 											{currentSvc.type}
 										</span>
+										<span class="px-2.5 py-0.5 rounded-full text-xs font-medium border {svcStatus === 'running' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : svcStatus === 'restarting' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : 'bg-red-50 text-red-700 border-red-200'} capitalize">
+											{svcStatus}
+										</span>
 									</h1>
-									<a
-										href={`/app/${selectedProject.blueprint.name.toLowerCase()}`}
-										target="_blank"
-										rel="noreferrer"
-										class="text-blue-600 hover:text-blue-700 text-sm flex items-center gap-1.5 transition-colors font-medium"
-									>
-										<span>{typeof window !== 'undefined' ? window.location.origin : ''}/app/{selectedProject.blueprint.name.toLowerCase()}</span>
-										<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-									</a>
+									{#if currentSvc.type === 'static' || currentSvc.type === 'web'}
+										<a
+											href={`/app/${selectedProject.blueprint.name.toLowerCase()}`}
+											target="_blank"
+											rel="noreferrer"
+											class="text-blue-600 hover:text-blue-700 text-sm flex items-center gap-1.5 transition-colors font-medium"
+										>
+											<span>{typeof window !== 'undefined' ? window.location.origin : ''}/app/{selectedProject.blueprint.name.toLowerCase()}</span>
+											<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+										</a>
+									{/if}
 								</div>
 							</div>
 
 							<div class="flex items-center gap-3">
 								<button
 									type="button"
-									onclick={() => triggerDeploy(selectedProject!.blueprint.id || selectedProject!.blueprint.name)}
+									onclick={() => {
+										showDeployLogsFor = selectedProject!.blueprint.id || selectedProject!.blueprint.name;
+									}}
+									class="bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-blue-200 shadow-sm flex items-center gap-2"
+								>
+									<svg class="w-4 h-4 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+									View Deployment Logs
+								</button>
+								<button
+									type="button"
+									onclick={async () => {
+										const pid = selectedProject!.blueprint.id || selectedProject!.blueprint.name;
+										showDeployLogsFor = pid;
+										await triggerDeploy(pid);
+									}}
 									class="bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-gray-300 shadow-sm"
 								>
 									Manual Deploy
@@ -451,16 +477,34 @@
 					<div class="flex-1 overflow-y-auto p-6 md:p-10">
 						<div class="max-w-5xl mx-auto w-full">
 							{#if serviceTab === 'events'}
-								<div class="space-y-4">
-									<h3 class="text-lg font-medium text-gray-900 mb-4">Deployment History</h3>
-									<div class="bg-white border border-gray-200 rounded-xl p-5 flex items-start gap-4 shadow-sm">
-										<div class="mt-1"><div class="w-3 h-3 bg-green-500 rounded-full ring-4 ring-green-50"></div></div>
-										<div class="flex-1">
-											<div class="flex justify-between items-start mb-1">
-												<h4 class="text-gray-900 font-medium">Deploy succeeded</h4>
-												<span class="text-xs text-gray-500 font-medium">Active</span>
+								<div class="space-y-6">
+									<h3 class="text-lg font-medium text-gray-900 mb-2">Service Configuration</h3>
+									
+									<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+										<div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+											<div class="flex items-center gap-2 mb-3 text-gray-700">
+												<svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+												<h4 class="font-medium">Build Command</h4>
 											</div>
-											<p class="text-sm text-gray-600 mb-3">Service {currentSvc.name} container status online.</p>
+											<div class="bg-gray-900 rounded-lg p-4 relative group">
+												<code class="text-emerald-400 font-mono text-sm break-all">
+													{currentSvc.build_command || 'None (Auto-detected)'}
+												</code>
+											</div>
+											<p class="text-xs text-gray-500 mt-3">Executed during the image build phase.</p>
+										</div>
+
+										<div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+											<div class="flex items-center gap-2 mb-3 text-gray-700">
+												<svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+												<h4 class="font-medium">Start Command</h4>
+											</div>
+											<div class="bg-gray-900 rounded-lg p-4 relative group">
+												<code class="text-blue-400 font-mono text-sm break-all">
+													{currentSvc.start_command || 'None (Container default)'}
+												</code>
+											</div>
+											<p class="text-xs text-gray-500 mt-3">Executed when the container starts.</p>
 										</div>
 									</div>
 								</div>
@@ -568,5 +612,8 @@
 	{/if}
 	{#if selectedContainerLogs}
 		<LogStreamModal {selectedContainerLogs} onClose={closeLogStream} />
+	{/if}
+	{#if showDeployLogsFor}
+		<DeploymentLogsModal projectId={showDeployLogsFor} onClose={() => (showDeployLogsFor = null)} />
 	{/if}
 </div>

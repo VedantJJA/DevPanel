@@ -44,6 +44,13 @@
 	let isDeploying = $state(false);
 	let deployError = $state<string | null>(null);
 
+	// Pre-deployment Review State
+	let preDeployData = $state<{
+		scanResult: ScanResult | null;
+		payloadServices: any[];
+		blueprint: any;
+	} | null>(null);
+
 	async function fetchUserRepos(username: string) {
 		if (!username.trim()) return;
 		isFetchingRepos = true;
@@ -103,7 +110,7 @@
 		step = 3;
 	}
 
-	async function handleDeploy() {
+	async function prepareDeploy() {
 		if (selectedType?.needsRepo && !repoUrl.trim()) {
 			deployError = 'Repository URL is required';
 			return;
@@ -115,7 +122,6 @@
 		try {
 			let scanResult: ScanResult | null = null;
 
-			// If repository URL provided, scan devpanel.yaml
 			if (selectedType?.needsRepo && repoUrl.trim()) {
 				try {
 					scanResult = await scanRepo(repoUrl.trim(), appName.trim());
@@ -124,7 +130,6 @@
 				}
 			}
 
-			// Generate service configuration dynamically based on selected type
 			let serviceType: 'web' | 'static' | 'database' | 'worker' = 'web';
 			let image = '';
 
@@ -176,23 +181,39 @@
 						instance_type: 'starter'
 				  }];
 
+			const blueprint = scanResult?.blueprint || {
+				version: '1.0',
+				project: appName.trim(),
+				services: {
+					[appName.trim()]: {
+						type: serviceType,
+						image: image,
+						source: { directory: '.', ref: 'main' },
+						build: { engine: serviceType === 'static' ? 'static' : 'node', command: buildCommand, output_dir: publishDir },
+						deploy: { port: containerPort, env: envVars }
+					}
+				}
+			};
+
+			preDeployData = { scanResult, payloadServices, blueprint };
+		} catch (err: any) {
+			deployError = err.message || 'Failed to prepare deployment configuration';
+		} finally {
+			isDeploying = false;
+		}
+	}
+
+	async function executeDeploy() {
+		if (!preDeployData) return;
+		isDeploying = true;
+		deployError = null;
+
+		try {
 			const createRes = await createProject({
 				app_name: appName.trim(),
 				repo_url: selectedType?.needsRepo ? repoUrl.trim() : '',
-				blueprint: scanResult?.blueprint || {
-					version: '1.0',
-					project: appName.trim(),
-					services: {
-						[appName.trim()]: {
-							type: serviceType,
-							image: image,
-							source: { directory: '.', ref: 'main' },
-							build: { engine: serviceType === 'static' ? 'static' : 'node', command: buildCommand, output_dir: publishDir },
-							deploy: { port: containerPort, env: envVars }
-						}
-					}
-				},
-				services: payloadServices
+				blueprint: preDeployData.blueprint,
+				services: preDeployData.payloadServices
 			});
 
 			const createdProjectId = createRes.blueprint?.id || appName.trim();
@@ -200,8 +221,9 @@
 			goto(`/projects/${createdProjectId}`);
 		} catch (err: any) {
 			deployError = err.message || 'Failed to create and deploy service';
-		} fontFinally: {
+		} finally {
 			isDeploying = false;
+			preDeployData = null;
 		}
 	}
 
@@ -497,18 +519,101 @@
 				</button>
 				<button
 					type="button"
-					onclick={handleDeploy}
+					onclick={prepareDeploy}
 					disabled={isDeploying}
-					class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2"
+					class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium rounded-lg transition-colors shadow-sm flex items-center gap-2"
 				>
 					{#if isDeploying}
-						<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-						<span>Deploying Service...</span>
+						<div class="animate-spin rounded-full h-4 w-4 border-2 border-white/20 border-t-white"></div>
+						<span>Preparing...</span>
 					{:else}
-						<span>Create {selectedType.title}</span>
+						<span>Review & Deploy</span>
+						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
 					{/if}
 				</button>
 			</div>
 		</div>
 	{/if}
 </div>
+
+<!-- Pre-Deployment Review Modal -->
+{#if preDeployData}
+	<div class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+		<div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+			<!-- Background overlay -->
+			<div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity backdrop-blur-sm" aria-hidden="true" onclick={() => (preDeployData = null)}></div>
+
+			<!-- Modal panel -->
+			<div class="inline-block align-bottom bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full border border-gray-100">
+				<div class="bg-white px-4 pt-5 pb-4 sm:p-8 sm:pb-6">
+					<div class="sm:flex sm:items-start">
+						<div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
+							<svg class="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+							</svg>
+						</div>
+						<div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+							<h3 class="text-xl leading-6 font-semibold text-gray-900" id="modal-title">
+								Review Deployment Details
+							</h3>
+							<div class="mt-2">
+								<p class="text-sm text-gray-500 mb-6">
+									The following services will be configured and deployed for <span class="font-semibold text-gray-800">{appName}</span>.
+								</p>
+
+								<div class="space-y-4 max-h-[50vh] overflow-y-auto pr-2">
+									{#each preDeployData.payloadServices as svc}
+										<div class="border border-gray-200 rounded-xl p-4 bg-gray-50 flex items-start justify-between">
+											<div>
+												<div class="flex items-center gap-2 mb-1">
+													<h4 class="font-bold text-gray-900 text-lg">{svc.name}</h4>
+													<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-200 text-gray-700 uppercase tracking-wider">{svc.type}</span>
+												</div>
+												<div class="text-sm text-gray-500 space-y-1">
+													{#if svc.image}
+														<p><span class="font-medium">Image:</span> {svc.image}</p>
+													{:else}
+														<p><span class="font-medium">Build Command:</span> <code class="bg-gray-100 px-1 rounded">{svc.build_command || 'Auto'}</code></p>
+													{/if}
+													<p><span class="font-medium">Start Command:</span> <code class="bg-gray-100 px-1 rounded">{svc.start_command || 'Auto'}</code></p>
+													<p><span class="font-medium">Port:</span> {svc.port || 'Auto'}</p>
+												</div>
+											</div>
+											<div class="bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm text-xs font-mono text-gray-600">
+												{Object.keys(svc.env_vars || {}).length} ENV Vars
+											</div>
+										</div>
+									{/each}
+								</div>
+
+							</div>
+						</div>
+					</div>
+				</div>
+				<div class="bg-gray-50 px-4 py-4 sm:px-8 sm:flex sm:flex-row-reverse rounded-b-2xl border-t border-gray-200">
+					<button
+						type="button"
+						class="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-6 py-2.5 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm transition-colors"
+						onclick={executeDeploy}
+						disabled={isDeploying}
+					>
+						{#if isDeploying}
+							<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+							Deploying...
+						{:else}
+							Confirm & Deploy
+						{/if}
+					</button>
+					<button
+						type="button"
+						class="mt-3 w-full inline-flex justify-center rounded-xl border border-gray-300 shadow-sm px-6 py-2.5 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm transition-colors"
+						onclick={() => (preDeployData = null)}
+						disabled={isDeploying}
+					>
+						Cancel
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+{/if}

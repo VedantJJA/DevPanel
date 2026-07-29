@@ -296,6 +296,10 @@ func (o *BlueprintOrchestrator) buildImageViaAPI(ctx context.Context, tarBuf *by
 
 	// Stream build output line by line
 	scanner := bufio.NewScanner(resp.Body)
+	// Increase max buffer size for large build outputs (e.g. npm install)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+	
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var buildMsg struct {
@@ -313,6 +317,9 @@ func (o *BlueprintOrchestrator) buildImageViaAPI(ctx context.Context, tarBuf *by
 				return fmt.Errorf("docker build error: %s", buildMsg.Error)
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("docker build stream read error: %w", err)
 	}
 
 	return nil

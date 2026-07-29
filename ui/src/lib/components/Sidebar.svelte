@@ -35,7 +35,7 @@
 	];
 
 	const serviceNav = [
-		{ id: 'events', label: 'Events', icon: 'activity' },
+		{ id: 'events', label: 'Configuration', icon: 'activity' },
 		{ id: 'logs', label: 'Logs', icon: 'terminal' },
 		{ id: 'env', label: 'Environment', icon: 'database' },
 		{ id: 'domains', label: 'Custom Domains', icon: 'globe' },
@@ -130,13 +130,24 @@
 		</div>
 
 		<div class="flex items-center gap-3 pt-2 border-t border-gray-200/80">
-			<div class="w-8 h-8 rounded-full bg-blue-100 border border-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs shadow-sm">
+			<div class="w-8 h-8 rounded-full bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700 font-bold text-xs shadow-sm">
 				DP
 			</div>
 			<div class="flex-1 min-w-0">
 				<p class="text-xs font-semibold text-gray-900 truncate">DevPanel System</p>
 				<p class="text-[10px] text-gray-500 truncate">{systemStats.os || 'Linux Runtime'} {systemStats.arch ? `(${systemStats.arch})` : ''}</p>
 			</div>
+			<button
+				type="button"
+				onclick={async () => {
+					await fetch('/api/auth/logout', { method: 'POST' });
+					window.location.href = '/login';
+				}}
+				class="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+				title="Log out"
+			>
+				<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+			</button>
 		</div>
 	</div>
 </aside>

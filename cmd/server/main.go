@@ -146,39 +146,52 @@ func main() {
 	mux.HandleFunc("/api/containers", docker.HandleListContainers(dockClient, database))
 	mux.HandleFunc("/api/volumes", docker.HandleListVolumes(dockClient))
 	mux.HandleFunc("/api/system/stats", docker.HandleSystemStats(dockClient))
-	mux.HandleFunc("/api/system/prune", docker.HandlePruneSystem(dockClient))
-	mux.HandleFunc("/api/containers/start-all", docker.HandleStartAllContainers(dockClient))
-	mux.HandleFunc("/api/containers/stop-all", docker.HandleStopAllContainers(dockClient))
-	mux.HandleFunc("/api/containers/start", docker.HandleStartContainer(dockClient))
-	mux.HandleFunc("/api/containers/stop", docker.HandleStopContainer(dockClient))
-	mux.HandleFunc("/api/containers/delete", docker.HandleDeleteContainer(dockClient, database))
-	mux.HandleFunc("/api/volumes/delete", docker.HandleDeleteVolume(dockClient))
-	mux.HandleFunc("/api/blueprints", docker.HandleListBlueprints(database))
-	mux.HandleFunc("/api/blueprints/delete", docker.HandleDeleteBlueprint(database))
-	mux.HandleFunc("/api/blueprints/deploy", docker.HandleDeployBlueprint(dockClient))
-	mux.HandleFunc("/api/blueprints/validate", docker.HandleValidateBlueprint(database))
-	mux.HandleFunc("/api/deployments/trigger", docker.HandleTriggerDeployment(database, dockClient))
-	mux.HandleFunc("/api/deployments/", docker.HandleDeploymentLogsSSE())
+	// --- Auth Endpoints (Unprotected) ---
+	mux.HandleFunc("GET /api/auth/status", docker.HandleAuthStatus(database))
+	mux.HandleFunc("POST /api/auth/setup", docker.HandleAuthSetup(database))
+	mux.HandleFunc("POST /api/auth/login", docker.HandleAuthLogin(database))
+	mux.HandleFunc("POST /api/auth/logout", docker.HandleAuthLogout())
+
+	// --- Protected API Endpoints ---
+	apiMux := http.NewServeMux()
+	
+	// Legacy endpoints
+	apiMux.HandleFunc("/api/containers", docker.HandleListContainers(dockClient, database))
+	apiMux.HandleFunc("/api/containers/start-all", docker.HandleStartAllContainers(dockClient))
+	apiMux.HandleFunc("/api/containers/stop-all", docker.HandleStopAllContainers(dockClient))
+	apiMux.HandleFunc("/api/containers/start", docker.HandleStartContainer(dockClient))
+	apiMux.HandleFunc("/api/containers/stop", docker.HandleStopContainer(dockClient))
+	apiMux.HandleFunc("/api/containers/delete", docker.HandleDeleteContainer(dockClient, database))
+	apiMux.HandleFunc("/api/volumes/delete", docker.HandleDeleteVolume(dockClient))
+	apiMux.HandleFunc("/api/blueprints", docker.HandleListBlueprints(database))
+	apiMux.HandleFunc("/api/blueprints/delete", docker.HandleDeleteBlueprint(database))
+	apiMux.HandleFunc("/api/blueprints/deploy", docker.HandleDeployBlueprint(dockClient))
+	apiMux.HandleFunc("/api/blueprints/validate", docker.HandleValidateBlueprint(database))
+	apiMux.HandleFunc("/api/deployments/trigger", docker.HandleTriggerDeployment(database, dockClient))
+	apiMux.HandleFunc("/api/deployments/", docker.HandleDeploymentLogsSSE())
 
 	// New Render-style Project & Scan Endpoints
-	mux.HandleFunc("GET /api/repos/user", docker.HandleListUserRepos(database))
-	mux.HandleFunc("POST /api/repos/scan", docker.HandleScanRepo(database))
-	mux.HandleFunc("POST /api/projects", docker.HandleCreateProject(database))
-	mux.HandleFunc("GET /api/projects", docker.HandleListProjects(database))
-	mux.HandleFunc("GET /api/projects/{id}", docker.HandleGetProject(database))
-	mux.HandleFunc("PATCH /api/projects/{id}/services/{name}", docker.HandleUpdateService(database))
-	mux.HandleFunc("POST /api/projects/{id}/deploy", docker.HandleTriggerProjectDeploy(database, dockClient))
-	mux.HandleFunc("GET /api/projects/{id}/deployments", docker.HandleListDeployments(database))
-	mux.HandleFunc("GET /api/projects/{id}/logs", docker.HandleProjectLogsSSE())
-	mux.HandleFunc("POST /api/projects/{id}/services/{name}/restart", docker.HandleRestartService(database, dockClient))
-	mux.HandleFunc("/api/settings", docker.HandleSettings(database))
+	apiMux.HandleFunc("GET /api/repos/user", docker.HandleListUserRepos(database))
+	apiMux.HandleFunc("POST /api/repos/scan", docker.HandleScanRepo(database))
+	apiMux.HandleFunc("POST /api/projects", docker.HandleCreateProject(database))
+	apiMux.HandleFunc("GET /api/projects", docker.HandleListProjects(database))
+	apiMux.HandleFunc("GET /api/projects/{id}", docker.HandleGetProject(database))
+	apiMux.HandleFunc("PATCH /api/projects/{id}/services/{name}", docker.HandleUpdateService(database))
+	apiMux.HandleFunc("POST /api/projects/{id}/deploy", docker.HandleTriggerProjectDeploy(database, dockClient))
+	apiMux.HandleFunc("GET /api/projects/{id}/deployments", docker.HandleListDeployments(database))
+	apiMux.HandleFunc("GET /api/projects/{id}/logs", docker.HandleProjectLogsSSE())
+	apiMux.HandleFunc("POST /api/projects/{id}/services/{name}/restart", docker.HandleRestartService(database, dockClient))
+	apiMux.HandleFunc("/api/settings", docker.HandleSettings(database))
+
+	// Mount protected API multiplexer under /api/ with middleware
+	mux.Handle("/api/", docker.AuthMiddleware(database, apiMux.ServeHTTP))
 
 	// Path-based application hosting route: http://140.245.116.79/app/<project-name>/
 	mux.HandleFunc("/app/", docker.HandleAppProxy(dockClient))
 
-	// WebSocket endpoints for real-time telemetry
-	mux.HandleFunc("/ws/stats", docker.HandleStatsWS(dockClient))
-	mux.HandleFunc("/ws/logs", docker.HandleLogsWS(dockClient))
+	// WebSocket endpoints for real-time telemetry (Protected)
+	mux.HandleFunc("/ws/stats", docker.AuthMiddleware(database, docker.HandleStatsWS(dockClient)))
+	mux.HandleFunc("/ws/logs", docker.AuthMiddleware(database, docker.HandleLogsWS(dockClient)))
 
 	// --- 4. Embedded Svelte Frontend SPA Handler -----------------------------
 	uiContent := ui.FS()

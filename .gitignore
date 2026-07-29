@@ -7,6 +7,7 @@
 devpnl
 devpanel
 devpanel_*
+!devpanel_yaml_format.md
 
 # Build output
 /bin/
