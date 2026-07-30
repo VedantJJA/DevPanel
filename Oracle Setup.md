@@ -1,6 +1,8 @@
 DevPanel Deployment Guide (Oracle Cloud OCI)This guide provides a step-by-step approach to deploying the DevPanel application on an Oracle Cloud Infrastructure (OCI) Ubuntu VM using Systemd Socket Activation for "Scale-to-Zero" capability.
-1. Oracle Cloud Infrastructure (OCI) SetupBefore deploying, you must configure the OCI network to allow web traffic.Security Lists: Navigate to your VCN > Public Subnet > Default Security List.Add Ingress Rules:Source Type: CIDRSource CIDR: 0.0.0.0/0IP Protocol: TCPDestination Port: 80, 443Note: Ping (ICMP) is blocked by OCI default rules. Use curl to test your connection, not ping.
-2. Server Environment SetupSSH into your Ubuntu VM and prepare the environment.# Update system
+1. Oracle Cloud Infrastructure (OCI) SetupBefore deploying, you must configure the OCI network to allow web traffic.Security Lists: Navigate to your VCN > Public Subnet > Default Security List.Add Ingress Rules:Source
+3. Type: CIDRSource CIDR: 0.0.0.0/0
+4. IP Protocol: TCPDestination Port: 80, 443Note: Ping (ICMP) is blocked by OCI default rules. Use curl to test your connection, not ping.
+5. Server Environment SetupSSH into your Ubuntu VM and prepare the environment.# Update system
 sudo apt update && sudo apt upgrade -y
 
 # Install Go, Node.js, and git
