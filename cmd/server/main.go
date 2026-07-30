@@ -80,6 +80,11 @@ func main() {
 	}
 	dockClient := docker.NewClient(dockSocket)
 
+	// Synchronize Nginx dynamic subdomains on startup
+	if err := docker.SyncNginx(dockClient); err != nil {
+		log.Printf("main: failed to sync nginx routes on startup: %v", err)
+	}
+
 	caddyAdmin := "http://localhost:2019"
 	if v := os.Getenv("DEVPNL_CADDY_ADMIN"); v != "" {
 		caddyAdmin = v
@@ -187,29 +192,11 @@ func main() {
 	apiMux.HandleFunc("DELETE /api/projects/{id}", docker.HandleDeleteProject(database, dockClient))
 	apiMux.HandleFunc("/api/settings", docker.HandleSettings(database))
 
-	// Mount protected API multiplexer under /api/ with smart Referer-based routing.
-	// If the request originated from a hosted app page (/app/<name>/), redirect
-	// to the app-proxy path so the backend container handles it. Otherwise fall
-	// through to the DevPanel auth middleware + API handlers.
+	// Mount protected API multiplexer under /api/
 	apiHandler := docker.AuthMiddleware(database, apiMux.ServeHTTP)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		referer := r.Header.Get("Referer")
-		if referer != "" {
-			refParts := strings.Split(referer, "/app/")
-			if len(refParts) > 1 {
-				projectName := strings.Split(refParts[1], "/")[0]
-				if projectName != "" {
-					// This API call came from a hosted app — proxy it to the app's backend
-					http.Redirect(w, r, "/app/"+projectName+r.URL.RequestURI(), http.StatusTemporaryRedirect)
-					return
-				}
-			}
-		}
 		apiHandler.ServeHTTP(w, r)
 	})
-
-	// Path-based application hosting route: http://140.245.116.79/app/<project-name>/
-	mux.HandleFunc("/app/", docker.HandleAppProxy(dockClient))
 
 	// WebSocket endpoints for real-time telemetry (Protected)
 	mux.HandleFunc("/ws/stats", docker.AuthMiddleware(database, docker.HandleStatsWS(dockClient)))
@@ -220,24 +207,8 @@ func main() {
 	fileServer := http.FileServer(http.FS(uiContent))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Do not return SPA 200.html fallback for API or WebSocket endpoints,
-		// BUT first check if the API request originated from a hosted app.
-		// If so, redirect it to the app's proxy subpath.
+		// Do not return SPA 200.html fallback for API or WebSocket endpoints
 		if strings.HasPrefix(r.URL.Path, "/api") || strings.HasPrefix(r.URL.Path, "/ws") || r.URL.Path == "/ask" || r.URL.Path == "/healthz" {
-			if strings.HasPrefix(r.URL.Path, "/api") {
-				referer := r.Header.Get("Referer")
-				if referer != "" {
-					refParts := strings.Split(referer, "/app/")
-					if len(refParts) > 1 {
-						projectName := strings.Split(refParts[1], "/")[0]
-						if projectName != "" {
-							// Redirect the /api/* call to the app's proxy so the backend container handles it
-							http.Redirect(w, r, "/app/"+projectName+r.URL.RequestURI(), http.StatusTemporaryRedirect)
-							return
-						}
-					}
-				}
-			}
 			http.NotFound(w, r)
 			return
 		}

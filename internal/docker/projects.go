@@ -190,16 +190,11 @@ func HandleDeleteProject(database *db.DB, dockClient *Client) http.HandlerFunc {
 			containerName := fmt.Sprintf("devpnl-%s-%s", projectSlug, svc.Name)
 			_ = dockClient.StopContainer(r.Context(), containerName)
 			_ = dockClient.RemoveContainer(r.Context(), containerName, true)
+		}
 
-			// Remove Nginx dynamic subdomain routing
-			subdomain := projectSlug
-			if len(svcs) > 1 && svc.Type != "web" && svc.Type != "static" && svc.Type != "frontend" {
-				subdomain = fmt.Sprintf("%s-%s", projectSlug, svc.Name)
-			}
-			
-			if err := globalNginxManager.RemoveRoute(subdomain); err != nil {
-				log.Printf("nginx_manager: failed to remove route for %s: %v", subdomain, err)
-			}
+		// Re-sync Nginx dynamic routing state
+		if err := globalNginxManager.SyncNginx(dockClient); err != nil {
+			log.Printf("nginx_manager: sync failed after deleting project %s: %v", projectID, err)
 		}
 
 		// Purge build logs from memory and disk

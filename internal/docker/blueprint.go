@@ -228,36 +228,11 @@ func (o *BlueprintOrchestrator) DeployOrchestrate(ctx context.Context, bp *Bluep
 		log.Printf("blueprint: service %q deployed successfully (container: %s)", sName, containerID)
 
 		// 4. Register Nginx dynamic subdomain routing
-		// Fetch container details to get the assigned random host port
-		containers, err := o.Client.ListContainers(ctx)
-		if err == nil {
-			var assignedPort uint16
-			for _, c := range containers {
-				if c.ID == containerID {
-					for _, p := range c.Ports {
-						if p.PublicPort > 0 {
-							assignedPort = p.PublicPort
-							break
-						}
-					}
-					break
-				}
-			}
-			if assignedPort > 0 {
-				subdomain := sanitizeName(bp.Project)
-				// If multiple services exist, only map web/frontend to the root domain. Other services get a suffix.
-				if len(bp.Services) > 1 && sCfg.Type != "web" && sCfg.Type != "static" && sCfg.Type != "frontend" {
-					subdomain = fmt.Sprintf("%s-%s", sanitizeName(bp.Project), sName)
-				}
-				
-				if err := globalNginxManager.AddRoute(subdomain, int(assignedPort)); err != nil {
-					log.Printf("nginx_manager: failed to add route for %s: %v", subdomain, err)
-					globalLogBroadcaster.Broadcast(bp.Project, "system", "engine", fmt.Sprintf("Failed to map subdomain for %s: %v", sName, err), "warn")
-				} else {
-					log.Printf("nginx_manager: routed %s.klouds.online -> port %d", subdomain, assignedPort)
-					globalLogBroadcaster.Broadcast(bp.Project, "system", "engine", fmt.Sprintf("Mapped domain %s.klouds.online to internal port %d", subdomain, assignedPort), "info")
-				}
-			}
+		if err := globalNginxManager.SyncNginx(o.Client); err != nil {
+			log.Printf("nginx_manager: sync failed after deploying %s: %v", sName, err)
+			globalLogBroadcaster.Broadcast(bp.Project, "system", "engine", fmt.Sprintf("Failed to sync Nginx routing for %s: %v", sName, err), "warn")
+		} else {
+			globalLogBroadcaster.Broadcast(bp.Project, "system", "engine", "Successfully synced Nginx routing table", "info")
 		}
 	}
 
