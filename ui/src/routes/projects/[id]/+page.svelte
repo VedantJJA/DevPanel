@@ -135,7 +135,7 @@
 					{#if projectData?.services?.some(s => s.type === 'web' || s.type === 'static')}
 						<span class="text-gray-300">•</span>
 						<a
-							href={`/app/${projectData.blueprint.name.toLowerCase()}`}
+							href={`http://${projectData.blueprint.name.toLowerCase()}.klouds.online`}
 							target="_blank"
 							rel="noreferrer"
 							class="text-blue-600 hover:text-blue-700 text-xs flex items-center gap-1 transition-colors font-medium"

@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
@@ -14,35 +15,67 @@ const nginxConfigPath = "/etc/nginx/conf.d/dynamic_subdomains.conf"
 const nginxTempPath = "/etc/nginx/conf.d/dynamic_subdomains.conf.tmp"
 const baseDomain = "klouds.online"
 
-// NginxManager handles dynamic subdomain routing for Nginx.
+// NginxManager handles dynamic subdomain routing for Nginx via a map configuration.
 type NginxManager struct {
 	mu sync.Mutex
 }
 
 var globalNginxManager = &NginxManager{}
 
-// SyncNginx is the package-level exported function to trigger an Nginx config rewrite.
+// SyncNginx reconstructs the entire Nginx map configuration from active containers.
 func SyncNginx(dockClient *Client) error {
 	return globalNginxManager.SyncNginx(dockClient)
 }
 
-// SyncNginx reads all active DevPanel containers and rewrites the Nginx configuration.
-func (m *NginxManager) SyncNginx(dockClient *Client) error {
+// AddNginxMapping atomically adds or updates a subdomain-to-port mapping.
+func AddNginxMapping(subdomain string, port uint16) error {
+	return globalNginxManager.AddMapping(subdomain, port)
+}
+
+// RemoveNginxMapping atomically removes a subdomain mapping.
+func RemoveNginxMapping(subdomain string) error {
+	return globalNginxManager.RemoveMapping(subdomain)
+}
+
+// AddMapping updates the map configuration file with a new domain-port pair.
+func (m *NginxManager) AddMapping(subdomain string, port uint16) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	mappings, err := m.readMappings()
+	if err != nil {
+		return err
+	}
+
+	mappings[subdomain] = fmt.Sprintf("%d", port)
+
+	return m.writeMappingsAndReload(mappings)
+}
+
+// RemoveMapping removes a domain from the map configuration file.
+func (m *NginxManager) RemoveMapping(subdomain string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	mappings, err := m.readMappings()
+	if err != nil {
+		return err
+	}
+
+	delete(mappings, subdomain)
+
+	return m.writeMappingsAndReload(mappings)
+}
+
+// SyncNginx reads all active DevPanel containers and rewrites the Nginx map.
+func (m *NginxManager) SyncNginx(dockClient *Client) error {
 	ctx := context.Background()
 	containers, err := dockClient.ListContainers(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list containers for nginx sync: %w", err)
 	}
 
-	type projectPorts struct {
-		FrontendPort uint16
-		BackendPort  uint16
-	}
-
-	projects := make(map[string]*projectPorts)
+	mappings := make(map[string]string)
 
 	for _, c := range containers {
 		cName := ""
@@ -71,98 +104,85 @@ func (m *NginxManager) SyncNginx(dockClient *Client) error {
 		}
 
 		parts := strings.Split(cName, "-")
-		if len(parts) < 3 { // devpnl-project-service
+		if len(parts) < 3 {
+			continue
+		}
+
+		projectSlug := parts[1]
+		domain := fmt.Sprintf("%s.%s", projectSlug, baseDomain)
+		mappings[domain] = fmt.Sprintf("%d", pubPort)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.writeMappingsAndReload(mappings)
+}
+
+// readMappings reads the current Nginx map configuration from disk.
+func (m *NginxManager) readMappings() (map[string]string, error) {
+	mappings := make(map[string]string)
+	
+	f, err := os.Open(nginxConfigPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return mappings, nil
+		}
+		return nil, fmt.Errorf("failed to open nginx config: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		
-		projectSlug := parts[1]
-		
-		if projects[projectSlug] == nil {
-			projects[projectSlug] = &projectPorts{}
-		}
-
-		svcType := c.Labels["devpanel.service.type"]
-		lowerName := strings.ToLower(cName)
-
-		// Determine if container is a web/frontend or an api/backend
-		isApi := false
-		if svcType == "api" || svcType == "backend" || strings.Contains(lowerName, "api") || strings.Contains(lowerName, "backend") {
-			isApi = true
-		}
-
-		isWeb := false
-		if svcType == "web" || svcType == "static" || svcType == "frontend" || strings.HasSuffix(lowerName, "-web") || strings.Contains(lowerName, "-ui") || strings.Contains(lowerName, "app") {
-			isWeb = true
-		}
-
-		// Assignment logic
-		if isApi {
-			projects[projectSlug].BackendPort = pubPort
-		} else if isWeb {
-			projects[projectSlug].FrontendPort = pubPort
-		} else {
-			// If we don't know, just assume it's frontend for now (if not already set)
-			if projects[projectSlug].FrontendPort == 0 {
-				projects[projectSlug].FrontendPort = pubPort
-			}
+		// Expected format: app1.klouds.online 8081;
+		line = strings.TrimSuffix(line, ";")
+		parts := strings.Fields(line)
+		if len(parts) == 2 {
+			mappings[parts[0]] = parts[1]
 		}
 	}
+	
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read nginx config: %w", err)
+	}
+	
+	return mappings, nil
+}
 
+// writeMappingsAndReload performs the atomic write and executes Nginx reload.
+func (m *NginxManager) writeMappingsAndReload(mappings map[string]string) error {
 	var sb strings.Builder
-	sb.WriteString("# Auto-generated by DevPanel. Do not edit manually.\n\n")
+	sb.WriteString("# Auto-generated by DevPanel. Do not edit manually.\n")
+	sb.WriteString("# Map format: $host $app_port;\n\n")
 
-	for projectSlug, ports := range projects {
-		domain := fmt.Sprintf("%s.%s", projectSlug, baseDomain)
-
-		sb.WriteString(fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n\n", domain))
-		
-		if ports.BackendPort > 0 {
-			sb.WriteString(fmt.Sprintf(`    location /api/ {
-        proxy_pass http://127.0.0.1:%d;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-
-`, ports.BackendPort))
-		}
-
-		if ports.FrontendPort > 0 {
-			sb.WriteString(fmt.Sprintf(`    location / {
-        proxy_pass http://127.0.0.1:%d;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-`, ports.FrontendPort))
-		}
-
-		sb.WriteString("}\n\n")
+	for domain, port := range mappings {
+		sb.WriteString(fmt.Sprintf("%s %s;\n", domain, port))
 	}
 
-	// Write to temporary file first
-	err = os.WriteFile(nginxTempPath, []byte(sb.String()), 0644)
+	// 1. Write to a temporary file
+	err := os.WriteFile(nginxTempPath, []byte(sb.String()), 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write nginx temp config: %w", err)
 	}
 
-	// Atomically rename temp file to actual config path
+	// 2. Atomically rename the temporary file over the actual file
 	err = os.Rename(nginxTempPath, nginxConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to rename nginx config: %w", err)
+		return fmt.Errorf("failed to atomically rename nginx config: %w", err)
 	}
 
-	// Reload Nginx using sudo
+	// 3. Execute Nginx reload using sudo (passwordless sudo must be configured for the ubuntu user)
 	cmd := exec.Command("sudo", "nginx", "-s", "reload")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to reload nginx: %v, output: %s", err, string(output))
 	}
 
-	log.Printf("nginx_manager: successfully synced %d projects and reloaded Nginx", len(projects))
+	log.Printf("nginx_manager: successfully synced %d mappings and reloaded Nginx", len(mappings))
 	return nil
 }
