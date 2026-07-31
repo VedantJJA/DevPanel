@@ -35,6 +35,7 @@
 
 	let containers = $state<Container[]>([]);
 	let volumes = $state<Volume[]>([]);
+	let theme = $state<'light' | 'dark'>('light');
 	let blueprints = $state<BlueprintItem[]>([]);
 	let systemStats = $state<SystemStats>({
 		totalContainers: 0,
@@ -274,7 +275,18 @@
 		}
 	}
 
+	function setTheme(nextTheme: 'light' | 'dark') {
+		theme = nextTheme;
+		if (typeof document !== 'undefined') {
+			document.documentElement.classList.toggle('dark', nextTheme === 'dark');
+			localStorage.setItem('devpnl_theme', nextTheme);
+		}
+	}
+
 	onMount(async () => {
+		const savedTheme = localStorage.getItem('devpnl_theme');
+		setTheme(savedTheme === 'dark' ? 'dark' : 'light');
+
 		try {
 			const res = await fetch('/api/settings');
 			if (res.ok) {
@@ -375,6 +387,8 @@
 					{githubUsername}
 					{githubToken}
 					{actionLoading}
+					{theme}
+					onSetTheme={setTheme}
 					onSetAutoRefresh={updateRefreshRate}
 					onSetGithubUsername={(username: string) => {
 						githubUsername = username;

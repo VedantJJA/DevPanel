@@ -4,10 +4,12 @@
 		githubUsername: string;
 		githubToken: string;
 		actionLoading: string | null;
+		theme: 'light' | 'dark';
 		onSetAutoRefresh: (rate: number) => void;
 		onSetGithubUsername: (username: string) => void;
 		onSetGithubToken: (token: string) => void;
 		onPruneSystem: () => void;
+		onSetTheme: (theme: 'light' | 'dark') => void;
 	}
 
 	let {
@@ -16,9 +18,11 @@
 		githubToken,
 		actionLoading,
 		onSetAutoRefresh,
+		theme,
 		onSetGithubUsername,
 		onSetGithubToken,
-		onPruneSystem
+		onPruneSystem,
+		onSetTheme
 	}: Props = $props();
 
 	// svelte-ignore state_referenced_locally
@@ -50,6 +54,19 @@
 	{/if}
 
 	<div class="space-y-8">
+		<section class="bg-white border border-gray-200 rounded-xl p-6 md:p-8 shadow-sm">
+			<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+				<div>
+					<h3 class="text-lg font-semibold text-gray-900">Appearance</h3>
+					<p class="text-sm text-gray-500 mt-1">Choose the workspace colour scheme. Your preference is saved on this device.</p>
+				</div>
+				<div class="inline-flex rounded-lg border border-gray-200 p-1 bg-gray-50" role="group" aria-label="Colour theme">
+					<button type="button" onclick={() => onSetTheme('light')} class="px-3 py-2 rounded-md text-sm font-medium transition-colors {theme === 'light' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}">Light</button>
+					<button type="button" onclick={() => onSetTheme('dark')} class="px-3 py-2 rounded-md text-sm font-medium transition-colors {theme === 'dark' ? 'bg-slate-800 text-white shadow-sm' : 'text-gray-500'}">Dark</button>
+				</div>
+			</div>
+		</section>
+
 		<!-- GitHub Integration Settings -->
 		<section class="bg-white border border-gray-200 rounded-xl p-6 md:p-8 shadow-sm space-y-4">
 			<div>

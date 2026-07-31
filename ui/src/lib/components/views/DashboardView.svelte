@@ -106,7 +106,7 @@
 	<div class="space-y-4">
 		<div class="flex items-center gap-2 text-sm font-semibold text-gray-700 px-1">
 			<svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-			<span>Active Infrastructure Services</span>
+			<span>Services in this workspace</span>
 			<span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-xs ml-2">
 				{containers.filter(c => c.name.toLowerCase().includes(search.toLowerCase())).length}
 			</span>
@@ -115,7 +115,7 @@
 		<div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden divide-y divide-gray-100">
 			{#if containers.length === 0}
 				<div class="p-8 text-center text-gray-500">
-					No active services or containers running. Click "+ New Service" to deploy an app stack.
+					This workspace has no services yet. Create a service to deploy an app, database, or background job.
 				</div>
 			{:else}
 				{#each containers.filter(c => c.name.toLowerCase().includes(search.toLowerCase())) as container}

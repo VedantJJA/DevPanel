@@ -53,7 +53,7 @@
 					<div class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
 					<h3 class="text-sm font-medium text-gray-300 font-mono">Deployment Logs: {projectId}</h3>
 				</div>
-				<button type="button" onclick={onClose} class="text-gray-500 hover:text-white transition-colors">
+				<button type="button" aria-label="Close deployment logs" onclick={onClose} class="text-gray-500 hover:text-white transition-colors">
 					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
 				</button>
 			</div>

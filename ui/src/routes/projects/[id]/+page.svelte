@@ -180,8 +180,9 @@
 		{#if projectData}
 			<!-- Multi-service tabs if app defines multiple services -->
 			{#if projectData.services.length > 1}
-				<div class="flex border-b border-gray-200 gap-2">
+				<div class="flex flex-wrap items-center justify-end border-b border-gray-200 gap-2 pb-3">
 					{#each projectData.services as svc, idx}
+					<span class="mr-auto text-sm font-medium text-gray-500">Services in this workspace</span>
 						<button
 							type="button"
 							onclick={() => { activeServiceIdx = idx; fetchServiceMetrics(); }}
