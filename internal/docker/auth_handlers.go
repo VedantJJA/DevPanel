@@ -12,8 +12,7 @@ import (
 	"github.com/VedantJJA/devpnl/internal/db"
 )
 
-// In-memory session store (simple for single-admin use cases)
-var currentSessionToken string
+// Session token is stored in the database for persistence
 
 // Helper to hash passwords using SHA-256 with a simple salt.
 // We use a fixed salt for simplicity since this is a single-admin system,
@@ -47,7 +46,8 @@ func setSessionCookie(w http.ResponseWriter, token string) {
 func AuthMiddleware(database *db.DB, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("devpanel_session")
-		if err != nil || cookie.Value == "" || cookie.Value != currentSessionToken {
+		dbSession, _ := database.GetSetting(r.Context(), "admin_session_token")
+		if err != nil || cookie.Value == "" || dbSession == "" || cookie.Value != dbSession {
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(ErrorResponse{Error: "Unauthorized"})
 			return
@@ -60,9 +60,10 @@ func AuthMiddleware(database *db.DB, next http.HandlerFunc) http.HandlerFunc {
 func HandleAuthStatus(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hash, _ := database.GetSetting(r.Context(), "admin_password_hash")
+		dbSession, _ := database.GetSetting(r.Context(), "admin_session_token")
 		
 		authenticated := false
-		if cookie, err := r.Cookie("devpanel_session"); err == nil && cookie.Value != "" && cookie.Value == currentSessionToken {
+		if cookie, err := r.Cookie("devpanel_session"); err == nil && cookie.Value != "" && dbSession != "" && cookie.Value == dbSession {
 			authenticated = true
 		}
 
@@ -100,8 +101,9 @@ func HandleAuthSetup(database *db.DB) http.HandlerFunc {
 		}
 
 		// Auto login
-		currentSessionToken = generateSessionToken()
-		setSessionCookie(w, currentSessionToken)
+		sessionToken := generateSessionToken()
+		_ = database.SetSetting(r.Context(), "admin_session_token", sessionToken)
+		setSessionCookie(w, sessionToken)
 		
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -134,8 +136,9 @@ func HandleAuthLogin(database *db.DB) http.HandlerFunc {
 			return
 		}
 
-		currentSessionToken = generateSessionToken()
-		setSessionCookie(w, currentSessionToken)
+		sessionToken := generateSessionToken()
+		_ = database.SetSetting(r.Context(), "admin_session_token", sessionToken)
+		setSessionCookie(w, sessionToken)
 		
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -143,9 +146,9 @@ func HandleAuthLogin(database *db.DB) http.HandlerFunc {
 }
 
 // HandleAuthLogout clears the session cookie
-func HandleAuthLogout() http.HandlerFunc {
+func HandleAuthLogout(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		currentSessionToken = ""
+		_ = database.SetSetting(r.Context(), "admin_session_token", "")
 		http.SetCookie(w, &http.Cookie{
 			Name:     "devpanel_session",
 			Value:    "",

@@ -155,7 +155,7 @@ func main() {
 	mux.HandleFunc("GET /api/auth/status", docker.HandleAuthStatus(database))
 	mux.HandleFunc("POST /api/auth/setup", docker.HandleAuthSetup(database))
 	mux.HandleFunc("POST /api/auth/login", docker.HandleAuthLogin(database))
-	mux.HandleFunc("POST /api/auth/logout", docker.HandleAuthLogout())
+	mux.HandleFunc("POST /api/auth/logout", docker.HandleAuthLogout(database))
 
 	// --- Protected API Endpoints ---
 	apiMux := http.NewServeMux()
