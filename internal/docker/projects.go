@@ -181,7 +181,7 @@ func HandleGetProject(database *db.DB, dockClient *Client) http.HandlerFunc {
 		if dockClient != nil {
 			containers, _ := dockClient.ListContainers(r.Context())
 			for i := range svcs {
-				livePort := findContainerPort(containers, bp.ID, bp.Name, svcs[i].Name)
+				livePort := findContainerPort(containers, bp.ID, bp.Name, svcs[i].Name, svcs[i].Port)
 				if livePort > 0 {
 					svcs[i].Port = livePort
 				}

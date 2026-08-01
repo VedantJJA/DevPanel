@@ -45,7 +45,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // findContainerPort finds the public host port for a container belonging to a project service.
-func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName string) int {
+func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName string, targetPort int) int {
 	if serviceName == "" {
 		return 0
 	}
@@ -64,12 +64,26 @@ func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName 
 	for _, c := range containers {
 		for _, n := range c.Names {
 			cleanName := strings.ToLower(strings.TrimPrefix(n, "/"))
+			matched := false
 			for _, t := range targets {
-				if cleanName == t {
+				if cleanName == t || strings.Contains(cleanName, sName) {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				// 1. Prefer port matching the service's target private port
+				if targetPort > 0 {
 					for _, p := range c.Ports {
-						if p.PublicPort > 0 {
+						if int(p.PrivatePort) == targetPort && p.PublicPort > 0 {
 							return int(p.PublicPort)
 						}
+					}
+				}
+				// 2. Fallback to any public port if exact private port match is missing
+				for _, p := range c.Ports {
+					if p.PublicPort > 0 {
+						return int(p.PublicPort)
 					}
 				}
 			}
@@ -232,7 +246,7 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 
 		// Check if container is running via Docker API
 		containers, _ := dockClient.ListContainers(r.Context())
-		containerPort := findContainerPort(containers, bp.ID, bp.Name, targetSvc.Name)
+		containerPort := findContainerPort(containers, bp.ID, bp.Name, targetSvc.Name, targetPort)
 
 		if containerPort == 0 {
 			containerPort = targetPort

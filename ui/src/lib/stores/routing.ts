@@ -75,10 +75,11 @@ export function getServiceUrl(
 	const rootDomain = cfg?.baseDomain || runtimeCfg.rootDomain;
 
 	if (mode === 'subdomain') {
+		const targetHost = serviceName && serviceName !== projectName ? serviceName : projectName;
 		return buildUrl({
 			routingMode: 'subdomain',
 			rootDomain: rootDomain,
-			projectName: `${serviceName}.${projectName}`,
+			projectName: targetHost,
 			path: '/'
 		});
 	}
