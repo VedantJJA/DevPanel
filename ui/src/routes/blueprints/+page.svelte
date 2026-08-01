@@ -3,6 +3,8 @@
 	import AppShell from '$lib/components/AppShell.svelte';
 	import type { BlueprintItem, SystemStats } from '$lib/types';
 	import { routingConfig, loadRoutingConfig, getProjectUrl } from '$lib/stores/routing';
+	import { buildProjectUrl } from '$lib/url';
+	import { getConfig } from '$lib/runtime/config';
 
 
 	let blueprints = $state<BlueprintItem[]>([]);
@@ -118,15 +120,15 @@
 					<div class="mt-auto flex items-center justify-between border-t pt-3 text-xs" style="border-color: var(--outline-variant); color: var(--on-surface-variant)">
 						<span>{bp.serviceCount ?? bp.service_count_actual ?? 0} services</span>
 						<div class="flex gap-2">
-							<a
-						href={getProjectUrl(bp.name, $routingConfig)}
+					<a
+						href={buildProjectUrl({ routingMode: getConfig().routingMode, rootDomain: getConfig().rootDomain, projectName: bp.name })}
 						target="_blank"
 						rel="noopener noreferrer"
 						class="flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-slate-100"
 						style="border-color: var(--outline-variant); color: var(--on-surface)"
 					>
 						<span class="material-symbols-outlined" style="font-size: 16px">open_in_new</span>
-						{$routingConfig.mode === 'subdomain' ? `${bp.name}.${$routingConfig.baseDomain}` : 'App Link'}
+						Open
 					</a>
 							<button
 								onclick={(e) => { e.stopPropagation(); deployBlueprint(bp); }}

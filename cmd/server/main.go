@@ -5,6 +5,7 @@
 //  2. Wraps routes with an active-request tracker.
 //  3. Arms a 5-minute idle timer that gracefully shuts down the server
 //     when no requests are in flight (scale-to-zero).
+//     Pass --no-idle to disable this behaviour for local development.
 //  4. Serves the embedded Svelte SPA on all non-API routes.
 package main
 
@@ -46,6 +47,14 @@ const (
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	// Parse simple flags before anything else.
+	noIdle := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--no-idle" || arg == "-no-idle" {
+			noIdle = true
+		}
+	}
 
 	// --- 1. Listener Initialization -----------------------------------------
 	addr := defaultAddr
@@ -100,6 +109,10 @@ func main() {
 
 	// Idle monitor triggers context cancellation when 0 active requests persist for idleTimeout.
 	idle := server.NewIdleShutdown(idleTimeout, cancel)
+	if noIdle {
+		idle.Stop() // disable idle shutdown for local development (--no-idle flag)
+		log.Println("main: idle-shutdown disabled (--no-idle)")
+	}
 
 	tracker := server.NewTracker(
 		idle.ResetIdle,  // onIdle: restart idle countdown
@@ -153,7 +166,8 @@ func main() {
 	mux.HandleFunc("/api/containers", docker.HandleListContainers(dockClient, database))
 	mux.HandleFunc("/api/volumes", docker.HandleListVolumes(dockClient))
 	mux.HandleFunc("/api/system/stats", docker.HandleSystemStats(dockClient))
-	// --- Auth Endpoints (Unprotected) ---
+	// --- Unprotected Public Config & Auth Endpoints ---
+	mux.HandleFunc("GET /api/config", docker.HandleConfig(database))
 	mux.HandleFunc("GET /api/auth/status", docker.HandleAuthStatus(database))
 	mux.HandleFunc("POST /api/auth/setup", docker.HandleAuthSetup(database))
 	mux.HandleFunc("POST /api/auth/login", docker.HandleAuthLogin(database))
@@ -424,6 +438,7 @@ func main() {
 
 func isDevPanelAdminRoute(p string) bool {
 	adminPrefixes := []string{
+		"/api/config",
 		"/api/auth/login",
 		"/api/auth/me",
 		"/api/auth/change-password",

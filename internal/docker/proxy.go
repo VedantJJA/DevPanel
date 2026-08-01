@@ -75,6 +75,170 @@ func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName 
 	return 0
 }
 
+// ProxyTarget encapsulates resolved upstream routing details.
+type ProxyTarget struct {
+	ProjectID   string
+	ProjectName string
+	Service     *db.ServiceRecord
+	Subpath     string
+	Prefix      string
+}
+
+// ResolveProjectRoute parses host and path against routingMode and rootDomain to select target project service.
+func ResolveProjectRoute(
+	r *http.Request,
+	rootDomain string,
+	routingMode string,
+	getBp func(name string) (*db.BlueprintRecord, error),
+	listSvcs func(bpID string) ([]db.ServiceRecord, error),
+) (*ProxyTarget, int, string) {
+	host := r.Host
+	if idx := strings.Index(host, ":"); idx >= 0 {
+		host = host[:idx]
+	}
+	hostLower := strings.ToLower(host)
+	cleanRoot := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(rootDomain, "."), "/"))
+	cleanRoot = strings.TrimPrefix(cleanRoot, "panel.")
+
+	hostWithoutRoot := hostLower
+	if strings.HasSuffix(hostLower, "."+cleanRoot) {
+		hostWithoutRoot = strings.TrimSuffix(hostLower, "."+cleanRoot)
+	}
+
+	if routingMode == "subdomain" {
+		if hostWithoutRoot == "panel" || hostLower == cleanRoot || hostLower == "panel."+cleanRoot {
+			return nil, 0, ""
+		}
+		projectName := hostWithoutRoot
+		serviceName := ""
+		if parts := strings.Split(hostWithoutRoot, "."); len(parts) == 2 {
+			serviceName = parts[0]
+			projectName = parts[1]
+		}
+		bp, err := getBp(projectName)
+		if err != nil || bp == nil {
+			bp2, err2 := getBp(hostWithoutRoot)
+			if err2 == nil && bp2 != nil {
+				bp = bp2
+				projectName = hostWithoutRoot
+				serviceName = ""
+			} else {
+				return nil, http.StatusNotFound, fmt.Sprintf("Project %q not found", hostWithoutRoot)
+			}
+		}
+		svcs, err := listSvcs(bp.ID)
+		if err != nil || len(svcs) == 0 {
+			return nil, http.StatusNotFound, fmt.Sprintf("No active services for project %q", bp.Name)
+		}
+		var targetSvc *db.ServiceRecord
+		if serviceName != "" {
+			for i := range svcs {
+				if strings.EqualFold(svcs[i].Name, serviceName) {
+					targetSvc = &svcs[i]
+					break
+				}
+			}
+		}
+		if targetSvc == nil {
+			for i := range svcs {
+				if svcs[i].Type == "static" {
+					targetSvc = &svcs[i]
+					break
+				}
+			}
+		}
+		if targetSvc == nil {
+			for i := range svcs {
+				if svcs[i].Type == "web" {
+					targetSvc = &svcs[i]
+					break
+				}
+			}
+		}
+		if targetSvc == nil {
+			targetSvc = &svcs[0]
+		}
+		return &ProxyTarget{
+			ProjectID:   bp.ID,
+			ProjectName: bp.Name,
+			Service:     targetSvc,
+			Subpath:     r.URL.Path,
+			Prefix:      "",
+		}, http.StatusOK, ""
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/app/") {
+		p := strings.TrimPrefix(r.URL.Path, "/app/")
+		parts := strings.Split(strings.Trim(p, "/"), "/")
+		if len(parts) == 0 || parts[0] == "" {
+			return nil, http.StatusNotFound, "Invalid project path"
+		}
+		rawName, _ := url.PathUnescape(parts[0])
+		if strings.Contains(rawName, "..") || rawName == "" {
+			return nil, http.StatusNotFound, "Invalid project name"
+		}
+		projectName := rawName
+		serviceName := ""
+		if len(parts) >= 2 {
+			serviceName, _ = url.PathUnescape(parts[1])
+		}
+		bp, err := getBp(projectName)
+		if err != nil || bp == nil {
+			return nil, http.StatusNotFound, fmt.Sprintf("Project %q not found", projectName)
+		}
+		svcs, err := listSvcs(bp.ID)
+		if err != nil || len(svcs) == 0 {
+			return nil, http.StatusNotFound, fmt.Sprintf("No active services for project %q", bp.Name)
+		}
+		var targetSvc *db.ServiceRecord
+		matchedSvcName := ""
+		if serviceName != "" {
+			for i := range svcs {
+				if strings.EqualFold(svcs[i].Name, serviceName) {
+					targetSvc = &svcs[i]
+					matchedSvcName = svcs[i].Name
+					break
+				}
+			}
+		}
+		if targetSvc == nil {
+			for i := range svcs {
+				if svcs[i].Type == "static" {
+					targetSvc = &svcs[i]
+					break
+				}
+			}
+		}
+		if targetSvc == nil {
+			for i := range svcs {
+				if svcs[i].Type == "web" {
+					targetSvc = &svcs[i]
+					break
+				}
+			}
+		}
+		if targetSvc == nil {
+			targetSvc = &svcs[0]
+		}
+		prefix := fmt.Sprintf("/app/%s", projectName)
+		if matchedSvcName != "" {
+			prefix = fmt.Sprintf("/app/%s/%s", projectName, matchedSvcName)
+		}
+		subpath := strings.TrimPrefix(r.URL.Path, prefix)
+		if subpath == "" || !strings.HasPrefix(subpath, "/") {
+			subpath = "/" + subpath
+		}
+		return &ProxyTarget{
+			ProjectID:   bp.ID,
+			ProjectName: bp.Name,
+			Service:     targetSvc,
+			Subpath:     subpath,
+			Prefix:      prefix,
+		}, http.StatusOK, ""
+	}
+	return nil, 0, ""
+}
+
 // HandleProjectReverseProxy handles routing for /app/{project}/{service}/ and subdomain routing (*.domain.com, *.nip.io)
 func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
