@@ -1,52 +1,65 @@
-import { describe, it } from 'node:test';
-import assert from 'node:assert';
-import { buildProjectUrl } from './url.ts';
+import { buildProjectUrl } from './url';
 
-describe('buildProjectUrl', () => {
-	it('builds URL for path mode without sub-path', () => {
-		const url = buildProjectUrl({
+function assertEqual(actual: string, expected: string, label: string): void {
+	if (actual !== expected) {
+		throw new Error(`[${label}] Expected ${expected}, got ${actual}`);
+	}
+}
+
+export function testBuildProjectUrl(): void {
+	assertEqual(
+		buildProjectUrl({
 			routingMode: 'path',
 			rootDomain: 'example.com',
 			projectName: 'my-project'
-		});
-		assert.strictEqual(url, 'https://example.com/app/my-project/');
-	});
+		}),
+		'https://example.com/app/my-project/',
+		'path mode'
+	);
 
-	it('builds URL for path mode with optional sub-path', () => {
-		const url = buildProjectUrl({
+	assertEqual(
+		buildProjectUrl({
 			routingMode: 'path',
 			rootDomain: 'example.com',
 			projectName: 'my-project',
 			path: '/dashboard'
-		});
-		assert.strictEqual(url, 'https://example.com/app/my-project/dashboard');
-	});
+		}),
+		'https://example.com/app/my-project/dashboard',
+		'path mode with sub-path'
+	);
 
-	it('builds URL for subdomain mode without sub-path', () => {
-		const url = buildProjectUrl({
+	assertEqual(
+		buildProjectUrl({
 			routingMode: 'subdomain',
 			rootDomain: 'example.com',
 			projectName: 'my-project'
-		});
-		assert.strictEqual(url, 'https://my-project.example.com/');
-	});
+		}),
+		'https://my-project.example.com/',
+		'subdomain mode'
+	);
 
-	it('builds URL for subdomain mode with optional sub-path', () => {
-		const url = buildProjectUrl({
+	assertEqual(
+		buildProjectUrl({
 			routingMode: 'subdomain',
 			rootDomain: 'example.com',
 			projectName: 'my-project',
 			path: '/api/v1'
-		});
-		assert.strictEqual(url, 'https://my-project.example.com/api/v1');
-	});
+		}),
+		'https://my-project.example.com/api/v1',
+		'subdomain mode with sub-path'
+	);
 
-	it('URL-encodes special characters in project name', () => {
-		const url = buildProjectUrl({
+	assertEqual(
+		buildProjectUrl({
 			routingMode: 'path',
 			rootDomain: 'example.com',
 			projectName: 'demo project'
-		});
-		assert.strictEqual(url, 'https://example.com/app/demo%20project/');
-	});
-});
+		}),
+		'https://example.com/app/demo%20project/',
+		'encoding project name'
+	);
+}
+
+if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+	testBuildProjectUrl();
+}
