@@ -18,6 +18,19 @@
 	let actionLoading = $state<string | null>(null);
 	let saveMessage = $state<string | null>(null);
 
+	// Derived helpers for live URL preview
+	function isLocalDomain(d: string) {
+		const h = d.split(':')[0];
+		return h === 'localhost' || h === '127.0.0.1' || /^192\.168\./.test(h) || /^10\./.test(h);
+	}
+	let previewScheme = $derived(isLocalDomain(baseDomain) ? 'http' : 'https');
+	let previewProjectUrl = $derived(
+		routingMode === 'subdomain'
+			? `${previewScheme}://my-project.${baseDomain}/`
+			: `${previewScheme}://${baseDomain}/app/my-project/`
+	);
+	let isLocalhostWarning = $derived(routingMode === 'subdomain' && isLocalDomain(baseDomain));
+
 	async function fetchSettings() {
 		try {
 			const res = await fetch('/api/settings');
@@ -126,56 +139,119 @@
 			{#if active === 'Project Routing'}
 				<section class="card-surface p-5 space-y-6">
 					<div>
-						<h2 class="font-bold text-base">Project Hosting &amp; Domain Routing</h2>
-						<p class="text-sm" style="color: var(--on-surface-variant)">Select how hosted services and projects are addressed across your local machine and Oracle Cloud Server.</p>
+						<h2 class="font-bold text-base">Project Hosting & Domain Routing</h2>
+						<p class="text-sm" style="color: var(--on-surface-variant)">Select how hosted projects are accessed publicly. Set your server's domain or IP below.</p>
 					</div>
 
-					<div class="space-y-4">
-						<div>
-							<label id="routing-label" class="block text-sm font-semibold mb-2">Routing URL Pattern</label>
-							<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-								<button
-									type="button"
-									onclick={() => (routingMode = 'path')}
-									class="p-4 border-2 rounded-xl text-left transition-all flex flex-col gap-1"
-									style={routingMode === 'path' ? 'border-color: var(--primary); background-color: var(--surface-low);' : 'border-color: var(--outline-variant); background-color: var(--surface-lowest);'}
-								>
-									<div class="flex items-center justify-between font-bold text-sm">
-										<span>Path-Based Routing</span>
-										{#if routingMode === 'path'}<span class="text-[10px] bg-primary text-white px-2 py-0.5 rounded font-bold uppercase">Active</span>{/if}
-									</div>
-									<code class="text-xs font-mono font-bold mt-1 text-blue-600">&lt;domain&gt;/app/&lt;project&gt;</code>
-									<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Works instantly without DNS or wildcard SSL setup. Ideal for IP addresses or single domains (e.g. http://localhost:8090/app/my-project).</p>
-								</button>
+					<!-- Step 1: Server Domain -->
+					<div class="space-y-2">
+						<label for="baseDomainInput" class="block text-sm font-semibold">
+							<span class="flex items-center gap-2">
+								<span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white" style="background-color: var(--primary)">1</span>
+								Server Domain / Public Address
+							</span>
+						</label>
+						<input
+							id="baseDomainInput"
+							type="text"
+							bind:value={baseDomain}
+							placeholder="e.g. klouds.online  or  140.245.xx.xx  or  localhost:8090"
+							style={inputStyle}
+							onfocus={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; }}
+							onblur={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--outline-variant)'; }}
+						/>
+						<p class="text-xs" style="color: var(--on-surface-variant)">
+							Enter your Oracle Cloud public IP or your custom domain (without <code>http://</code> or trailing slash).
+							Leave <code>localhost:8090</code> for local development only.
+						</p>
 
-								<button
-									type="button"
-									onclick={() => (routingMode = 'subdomain')}
-									class="p-4 border-2 rounded-xl text-left transition-all flex flex-col gap-1"
-									style={routingMode === 'subdomain' ? 'border-color: var(--primary); background-color: var(--surface-low);' : 'border-color: var(--outline-variant); background-color: var(--surface-lowest);'}
-								>
-									<div class="flex items-center justify-between font-bold text-sm">
-										<span>Subdomain Routing</span>
-										{#if routingMode === 'subdomain'}<span class="text-[10px] bg-primary text-white px-2 py-0.5 rounded font-bold uppercase">Active</span>{/if}
-									</div>
-									<code class="text-xs font-mono font-bold mt-1 text-blue-600">&lt;project&gt;.&lt;domain&gt;</code>
-									<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Isolated subdomains per service/project. Requires wildcard DNS or hosts entry (e.g. http://my-project.localhost:8090).</p>
-								</button>
+						<!-- Live URL preview -->
+						<div class="mt-2 flex items-center gap-2 rounded-lg border p-3 text-xs" style="border-color: var(--outline-variant); background-color: var(--surface-low)">
+							<span class="material-symbols-outlined shrink-0" style="font-size: 16px; color: var(--primary)">link</span>
+							<span style="color: var(--on-surface-variant)">Generated project URL:</span>
+							<code class="font-mono font-bold truncate" style="color: var(--primary)">{previewProjectUrl}</code>
+						</div>
+					</div>
+
+					<!-- Step 2: Routing Mode -->
+					<div class="space-y-2">
+						<label id="routing-label" class="block text-sm font-semibold">
+							<span class="flex items-center gap-2">
+								<span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white" style="background-color: var(--primary)">2</span>
+								Routing URL Pattern
+							</span>
+						</label>
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+							<button
+								type="button"
+								onclick={() => (routingMode = 'path')}
+								class="p-4 border-2 rounded-xl text-left transition-all flex flex-col gap-1"
+								style={routingMode === 'path' ? 'border-color: var(--primary); background-color: var(--surface-low);' : 'border-color: var(--outline-variant); background-color: var(--surface-lowest);'}
+							>
+								<div class="flex items-center justify-between font-bold text-sm">
+									<span>Path-Based Routing</span>
+									{#if routingMode === 'path'}<span class="text-[10px] bg-primary text-white px-2 py-0.5 rounded font-bold uppercase">Active</span>{/if}
+								</div>
+								<code class="text-xs font-mono font-bold mt-1" style="color: var(--primary)">{previewScheme}://{baseDomain}/app/my-project/</code>
+								<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Works on any IP or domain with zero DNS changes. Best for single-domain setups.</p>
+							</button>
+
+							<button
+								type="button"
+								onclick={() => (routingMode = 'subdomain')}
+								class="p-4 border-2 rounded-xl text-left transition-all flex flex-col gap-1"
+								style={routingMode === 'subdomain' ? 'border-color: var(--primary); background-color: var(--surface-low);' : 'border-color: var(--outline-variant); background-color: var(--surface-lowest);'}
+							>
+								<div class="flex items-center justify-between font-bold text-sm">
+									<span>Subdomain Routing</span>
+									{#if routingMode === 'subdomain'}<span class="text-[10px] bg-primary text-white px-2 py-0.5 rounded font-bold uppercase">Active</span>{/if}
+								</div>
+								<code class="text-xs font-mono font-bold mt-1" style="color: var(--primary)">{previewScheme}://my-project.{baseDomain}/</code>
+								<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Each project gets its own subdomain. Requires wildcard DNS record <code>*</code> → your server IP.</p>
+							</button>
+						</div>
+
+						<!-- Localhost warning for subdomain mode -->
+						{#if isLocalhostWarning}
+						<div class="flex items-start gap-3 rounded-lg border p-3 text-xs" style="border-color: #b45309; background-color: #fef3c7; color: #92400e;">
+							<span class="material-symbols-outlined shrink-0" style="font-size: 18px">warning</span>
+							<div>
+								<p class="font-bold">Subdomain routing won't work with <code>localhost</code></p>
+								<p class="mt-1">Browsers don't support wildcard subdomains on localhost. Set your Oracle Cloud public IP or domain above (Step 1) first, then re-enable subdomain routing.</p>
 							</div>
 						</div>
+						{/if}
 
-						<div>
-							<label for="baseDomainInput" class="mb-1.5 block text-sm font-medium">Server Base Domain / Host Address</label>
-							<input id="baseDomainInput" type="text" bind:value={baseDomain} placeholder="e.g. localhost:8090 or 129.146.xxx.xxx or my-domain.com" style={inputStyle}
-								onfocus={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; }}
-								onblur={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--outline-variant)'; }} />
-							<p class="text-xs mt-1" style="color: var(--on-surface-variant)">When deployed on your Oracle Cloud server, set this to your server's public IP address or domain name.</p>
+						<!-- DNS guide for subdomain mode with custom domain -->
+						{#if routingMode === 'subdomain' && !isLocalhostWarning}
+						<div class="rounded-lg border p-4 text-xs space-y-2" style="border-color: var(--outline-variant); background-color: var(--surface-low)">
+							<p class="font-bold flex items-center gap-2" style="color: var(--on-surface)">
+								<span class="material-symbols-outlined" style="font-size: 16px; color: var(--primary)">dns</span>
+								Required DNS configuration (one-time, in your domain registrar)
+							</p>
+							<table class="w-full text-left">
+								<thead><tr style="color: var(--on-surface-variant)"><th class="pb-1 pr-4">Type</th><th class="pb-1 pr-4">Name</th><th class="pb-1">Value</th></tr></thead>
+								<tbody style="font-family: monospace">
+									<tr>
+										<td class="pr-4 font-bold">A</td>
+										<td class="pr-4">*</td>
+										<td style="color: var(--primary)">{baseDomain.split(':')[0]}</td>
+									</tr>
+									<tr>
+										<td class="pr-4 font-bold">A</td>
+										<td class="pr-4">@</td>
+										<td style="color: var(--primary)">{baseDomain.split(':')[0]}</td>
+									</tr>
+								</tbody>
+							</table>
+							<p style="color: var(--on-surface-variant)">Add a wildcard <code>A</code> record pointing <code>*</code> to your Oracle Cloud IP. This makes <code>vtopcc.{baseDomain.split(':')[0]}</code>, <code>myapp.{baseDomain.split(':')[0]}</code>, etc. all resolve to your server.</p>
 						</div>
-
-						<button onclick={saveRoutingSettings} class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-opacity hover:opacity-90" style="background-color: var(--primary); color: var(--on-primary)">
-							<span class="material-symbols-outlined" style="font-size: 18px">save</span>Save Routing Settings
-						</button>
+						{/if}
 					</div>
+
+					<button onclick={saveRoutingSettings} class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-opacity hover:opacity-90" style="background-color: var(--primary); color: var(--on-primary)">
+						<span class="material-symbols-outlined" style="font-size: 18px">save</span>Save Routing Settings
+					</button>
 				</section>
 			{/if}
 
