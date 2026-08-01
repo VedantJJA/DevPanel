@@ -180,7 +180,7 @@ func main() {
 	apiMux.HandleFunc("POST /api/repos/scan", docker.HandleScanRepo(database))
 	apiMux.HandleFunc("POST /api/projects", docker.HandleCreateProject(database))
 	apiMux.HandleFunc("GET /api/projects", docker.HandleListProjects(database))
-	apiMux.HandleFunc("GET /api/projects/{id}", docker.HandleGetProject(database))
+	apiMux.HandleFunc("GET /api/projects/{id}", docker.HandleGetProject(database, dockClient))
 	apiMux.HandleFunc("PATCH /api/projects/{id}/services/{name}", docker.HandleUpdateService(database))
 	apiMux.HandleFunc("POST /api/projects/{id}/deploy", docker.HandleTriggerProjectDeploy(database, dockClient))
 	apiMux.HandleFunc("GET /api/projects/{id}/deployments", docker.HandleListDeployments(database))
@@ -201,6 +201,8 @@ func main() {
 	// WebSocket endpoints for real-time telemetry (Protected)
 	mux.HandleFunc("/ws/stats", docker.AuthMiddleware(database, docker.HandleStatsWS(dockClient)))
 	mux.HandleFunc("/ws/logs", docker.AuthMiddleware(database, docker.HandleLogsWS(dockClient)))
+	// Build-log WebSocket — streams in-process deploy logs with clear-on-new-build signalling
+	mux.HandleFunc("/ws/projects/{id}/logs", docker.AuthMiddleware(database, docker.HandleBuildLogsWS()))
 
 	// Reverse proxy route for /app/{project}/{service}/
 	mux.HandleFunc("/app/", docker.HandleProjectReverseProxy(database, dockClient))

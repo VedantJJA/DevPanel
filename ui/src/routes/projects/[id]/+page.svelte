@@ -6,8 +6,32 @@
 	import Terminal from '$lib/components/Terminal.svelte';
 	import { getProject, updateService, triggerDeploy, restartService } from '$lib/api';
 	import type { ProjectDetail, ServiceRecord, SystemStats } from '$lib/types';
+	import { createLogStore } from '$lib/stores/logs';
 
 	let projectId = $derived(page.params.id || '');
+
+	// --- Build log store (WebSocket-backed, auto-clears on new deploy) ---
+	let buildLogStore = $derived(createLogStore(projectId));
+	let logScrollEl = $state<HTMLElement | null>(null);
+
+	// Auto-scroll log container to bottom on new entries
+	$effect(() => {
+		if (logScrollEl && buildLogStore) {
+			// Reading $buildLogStore triggers reactive update
+			logScrollEl.scrollTop = logScrollEl.scrollHeight;
+		}
+	});
+
+	// Trigger a new project deploy via the existing SSE pipeline
+	async function startDeploy() {
+		if (!projectId) return;
+		await triggerDeploy(projectId);
+	}
+
+	// Clear build logs both server-side and locally
+	function clearBuildLogs() {
+		buildLogStore.clear();
+	}
 
 	let projectData = $state<ProjectDetail | null>(null);
 	let activeServiceIdx = $state(0);

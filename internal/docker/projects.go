@@ -163,7 +163,7 @@ func HandleListProjects(database *db.DB) http.HandlerFunc {
 }
 
 // HandleGetProject — GET /api/projects/{id}
-func HandleGetProject(database *db.DB) http.HandlerFunc {
+func HandleGetProject(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		id := r.PathValue("id")
@@ -178,6 +178,16 @@ func HandleGetProject(database *db.DB) http.HandlerFunc {
 		}
 
 		svcs, _ := database.ListServices(r.Context(), bp.ID)
+		if dockClient != nil {
+			containers, _ := dockClient.ListContainers(r.Context())
+			for i := range svcs {
+				livePort := findContainerPort(containers, bp.ID, bp.Name, svcs[i].Name)
+				if livePort > 0 {
+					svcs[i].Port = livePort
+				}
+			}
+		}
+
 		deps, _ := database.ListDeployments(r.Context(), bp.ID)
 		var latest *db.DeploymentRecord
 		if len(deps) > 0 {

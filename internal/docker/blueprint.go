@@ -437,6 +437,9 @@ func (o *BlueprintOrchestrator) deployContainer(ctx context.Context, project str
 		cmdList = strings.Fields(cfg.Deploy.Command)
 	}
 
+	// Ensure custom bridge network exists for inter-container communication & DNS resolution
+	_ = o.Client.EnsureNetwork(ctx, "devpanel-net")
+
 	targetHostPort := fmt.Sprintf("%d", port)
 	config := ContainerCreateConfig{
 		Image:        imageName,
@@ -447,6 +450,7 @@ func (o *BlueprintOrchestrator) deployContainer(ctx context.Context, project str
 			"devpanel.service.type": cfg.Type,
 		},
 		HostConfig: HostConfig{
+			NetworkMode: "devpanel-net",
 			PortBindings: map[string][]PortBinding{
 				portKey: {{HostPort: targetHostPort}},
 			},

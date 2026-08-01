@@ -277,11 +277,34 @@ type HostConfig struct {
 	PortBindings map[string][]PortBinding `json:"PortBindings,omitempty"`
 	Binds        []string                 `json:"Binds,omitempty"`
 	AutoRemove   bool                     `json:"AutoRemove,omitempty"`
+	NetworkMode  string                   `json:"NetworkMode,omitempty"`
 }
 
 type PortBinding struct {
 	HostIP   string `json:"HostIp,omitempty"`
 	HostPort string `json:"HostPort,omitempty"`
+}
+
+// EnsureNetwork ensures that a Docker bridge network exists for inter-container communication.
+func (c *Client) EnsureNetwork(ctx context.Context, networkName string) error {
+	url := apiURL("/networks/create")
+	payload := map[string]interface{}{
+		"Name":           networkName,
+		"CheckDuplicate": true,
+		"Driver":         "bridge",
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 type ContainerCreateResponse struct {

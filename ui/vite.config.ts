@@ -29,7 +29,12 @@ export default defineConfig({
 			'/ws': {
 				target: 'http://localhost:8090',
 				ws: true
-			}
+			},
+			'/assets': 'http://localhost:8090',
+			'/static': 'http://localhost:8090',
+			'/css': 'http://localhost:8090',
+			'/js': 'http://localhost:8090',
+			'/img': 'http://localhost:8090'
 		}
 	}
 });

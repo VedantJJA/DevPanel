@@ -320,3 +320,79 @@ func HandleServiceLogsSSE(dockClient *Client) http.HandlerFunc {
 		}
 	}
 }
+
+// HandleBuildLogsWS streams in-process build logs via WebSocket.
+//
+// Query params:
+//   - id: project ID (required)
+//
+// Protocol:
+//   - On first connect it replays all buffered logs.
+//   - Every 100 ms it pushes any new entries appended since last poll.
+//   - When a new build starts and Clear() is called, the buffer shrinks;
+//     the handler detects this and sends {"type":"clear"} so the frontend
+//     can wipe its log list before showing the fresh build output.
+func HandleBuildLogsWS() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		if projectID == "" {
+			projectID = r.URL.Query().Get("id")
+		}
+		if projectID == "" {
+			http.Error(w, `{"error":"missing id"}`, http.StatusBadRequest)
+			return
+		}
+
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			InsecureSkipVerify: true,
+		})
+		if err != nil {
+			log.Printf("ws/build-logs: accept error: %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+
+		ctx := conn.CloseRead(r.Context())
+		buf := globalLogManager.GetOrCreate(projectID)
+
+		// Replay historical entries on connect.
+		initial := buf.GetAll()
+		for _, entry := range initial {
+			data, _ := json.Marshal(entry)
+			if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+				return
+			}
+		}
+		lastLen := len(initial)
+
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				current := buf.GetAll()
+				curLen := len(current)
+
+				// Buffer was cleared → new build started.
+				if curLen < lastLen {
+					conn.Write(ctx, websocket.MessageText, []byte(`{"type":"clear"}`))
+					lastLen = 0
+				}
+
+				// Push new entries.
+				if curLen > lastLen {
+					for _, entry := range current[lastLen:] {
+						data, _ := json.Marshal(entry)
+						if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+							return
+						}
+					}
+					lastLen = curLen
+				}
+			}
+		}
+	}
+}

@@ -1,7 +1,10 @@
 package docker
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -9,6 +12,40 @@ import (
 
 	"github.com/VedantJJA/devpnl/internal/db"
 )
+
+// findContainerPort finds the public host port for a container belonging to a project service.
+func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName string) int {
+	if serviceName == "" {
+		return 0
+	}
+	sName := strings.ToLower(serviceName)
+	cleanID := strings.ToLower(strings.TrimPrefix(bpID, "bp-"))
+	pName := strings.ToLower(bpName)
+
+	targets := []string{
+		fmt.Sprintf("devpnl-%s-%s", cleanID, sName),
+		fmt.Sprintf("devpnl-%s-%s", strings.ToLower(bpID), sName),
+	}
+	if pName != "" {
+		targets = append(targets, fmt.Sprintf("devpnl-%s-%s", pName, sName))
+	}
+
+	for _, c := range containers {
+		for _, n := range c.Names {
+			cleanName := strings.ToLower(strings.TrimPrefix(n, "/"))
+			for _, t := range targets {
+				if cleanName == t {
+					for _, p := range c.Ports {
+						if p.PublicPort > 0 {
+							return int(p.PublicPort)
+						}
+					}
+				}
+			}
+		}
+	}
+	return 0
+}
 
 // HandleProjectReverseProxy handles routing for /app/{project}/{service}/ and /app/{project}/
 func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.HandlerFunc {
@@ -99,24 +136,7 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 
 		// Check if container is running via Docker API
 		containers, _ := dockClient.ListContainers(r.Context())
-		var containerPort int
-		targetContainerName := fmt.Sprintf("devpnl-%s-%s", bp.ID, targetSvc.Name)
-		for _, c := range containers {
-			for _, n := range c.Names {
-				cleanName := strings.TrimPrefix(n, "/")
-				if cleanName == targetContainerName || strings.Contains(cleanName, targetSvc.Name) {
-					for _, p := range c.Ports {
-						if p.PublicPort > 0 {
-							containerPort = int(p.PublicPort)
-							break
-						}
-					}
-				}
-			}
-			if containerPort > 0 {
-				break
-			}
-		}
+		containerPort := findContainerPort(containers, bp.ID, bp.Name, targetSvc.Name)
 
 		if containerPort == 0 {
 			containerPort = targetPort
@@ -130,32 +150,89 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 
 		// Reverse proxy handler
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
+
+		// Dynamically rewrite HTML base and asset URLs to support subpath hosting (/app/<project>/)
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			contentType := resp.Header.Get("Content-Type")
+			if strings.Contains(contentType, "text/html") && resp.Body != nil {
+				bodyBytes, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return nil
+				}
+				resp.Body.Close()
+
+				htmlStr := string(bodyBytes)
+
+				subpath := fmt.Sprintf("/app/%s/", projectName)
+				if serviceName != "" {
+					subpath = fmt.Sprintf("/app/%s/%s/", projectName, serviceName)
+				}
+
+				if !strings.Contains(htmlStr, "<base ") && !strings.Contains(htmlStr, "<BASE ") {
+					baseTag := fmt.Sprintf(`<head><base href="%s">`, subpath)
+					if strings.Contains(htmlStr, "<head>") {
+						htmlStr = strings.Replace(htmlStr, "<head>", baseTag, 1)
+					} else if strings.Contains(htmlStr, "<HEAD>") {
+						htmlStr = strings.Replace(htmlStr, "<HEAD>", baseTag, 1)
+					} else if strings.Contains(htmlStr, "<html>") {
+						htmlStr = strings.Replace(htmlStr, "<html>", "<html>"+baseTag, 1)
+					}
+				}
+
+				htmlStr = strings.ReplaceAll(htmlStr, `src="/assets/`, `src="assets/`)
+				htmlStr = strings.ReplaceAll(htmlStr, `href="/assets/`, `href="assets/`)
+				htmlStr = strings.ReplaceAll(htmlStr, `src="/static/`, `src="static/`)
+				htmlStr = strings.ReplaceAll(htmlStr, `href="/static/`, `href="static/`)
+
+				newBody := []byte(htmlStr)
+				resp.Body = io.NopCloser(bytes.NewReader(newBody))
+				resp.ContentLength = int64(len(newBody))
+				resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
+			}
+			return nil
+		}
+
 		proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `<!DOCTYPE html>
+			isAPI := strings.Contains(req.URL.Path, "/api") ||
+				strings.Contains(req.Header.Get("Accept"), "application/json") ||
+				req.Header.Get("X-Requested-With") == "XMLHttpRequest"
+
+			w.WriteHeader(http.StatusBadGateway)
+
+			if isAPI {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":      fmt.Sprintf("Service container %q is unreachable: %v", targetSvc.Name, err),
+					"service":    targetSvc.Name,
+					"project":    projectName,
+					"backendUrl": fmt.Sprintf("http://localhost:%d", containerPort),
+				})
+			} else {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head>
-	<title>%s — DevPanel App</title>
+	<title>%s — DevPanel App Unavailable</title>
 	<meta charset="utf-8">
 	<style>
 		body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
 		.card { background: #1e293b; border: 1px solid #334155; padding: 2.5rem; border-radius: 1rem; max-width: 500px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
-		.badge { display: inline-block; background: #3b82f6; color: white; font-weight: bold; font-size: 0.75rem; padding: 0.25rem 0.75rem; border-radius: 9999px; text-transform: uppercase; margin-bottom: 1rem; }
+		.badge { display: inline-block; background: #ef4444; color: white; font-weight: bold; font-size: 0.75rem; padding: 0.25rem 0.75rem; border-radius: 9999px; text-transform: uppercase; margin-bottom: 1rem; }
 		h1 { margin: 0 0 0.5rem 0; font-size: 1.5rem; }
 		p { color: #94a3b8; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem; }
-		.code { background: #0f172a; border: 1px solid #334155; padding: 0.75rem; border-radius: 0.5rem; font-family: monospace; font-size: 0.85rem; color: #38bdf8; word-break: break-all; }
+		.code { background: #0f172a; border: 1px solid #334155; padding: 0.75rem; border-radius: 0.5rem; font-family: monospace; font-size: 0.85rem; color: #f87171; word-break: break-all; }
 	</style>
 </head>
 <body>
 	<div class="card">
-		<div class="badge">DevPanel Live Service</div>
+		<div class="badge">Service Offline</div>
 		<h1>%s / %s</h1>
-		<p>Service container is active and deployed on DevPanel. Listening for incoming traffic on target container port %d.</p>
-		<div class="code">http://localhost:%d</div>
+		<p>Service container is starting up or temporarily unreachable on host port %d.</p>
+		<div class="code">%v</div>
 	</div>
 </body>
-</html>`, targetSvc.Name, projectName, targetSvc.Name, containerPort, containerPort)
+</html>`, targetSvc.Name, projectName, targetSvc.Name, containerPort, err)
+			}
 		}
 
 		// Strip /app/{project}/{service} or /app/{project} prefix from request path
