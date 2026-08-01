@@ -5,12 +5,12 @@ import { writable, get } from 'svelte/store';
 
 export interface RoutingConfig {
 	mode: 'path' | 'subdomain';
-	baseDomain: string; // e.g. "klouds.online", "140.245.1.2", "localhost:8090"
+	baseDomain: string; // e.g. "klouds.online", "140.245.1.2:8090", "localhost:8090"
 }
 
 export const routingConfig = writable<RoutingConfig>({
 	mode: 'path',
-	baseDomain: 'localhost:8090'
+	baseDomain: typeof window !== 'undefined' ? window.location.host : 'localhost:8090'
 });
 
 export async function loadRoutingConfig(): Promise<void> {
@@ -18,13 +18,23 @@ export async function loadRoutingConfig(): Promise<void> {
 		const res = await fetch('/api/settings');
 		if (res.ok) {
 			const s = await res.json();
+			const detectedDomain =
+				(typeof window !== 'undefined' && window.location.host) ||
+				s.base_domain ||
+				'localhost:8090';
 			routingConfig.set({
 				mode: s.routing_mode === 'subdomain' ? 'subdomain' : 'path',
-				baseDomain: s.base_domain || 'localhost:8090'
+				baseDomain: detectedDomain
 			});
 		}
 	} catch (e) {
 		console.error('Failed to load routing config:', e);
+		if (typeof window !== 'undefined') {
+			routingConfig.set({
+				mode: 'path',
+				baseDomain: window.location.host
+			});
+		}
 	}
 }
 
@@ -40,8 +50,11 @@ function isLocalDomain(domain: string): boolean {
 	);
 }
 
-/** Derive scheme from domain — http for local, https for public domains. */
+/** Derive scheme from domain or browser context — http for local, https for public domains. */
 export function schemeFor(domain: string): 'http' | 'https' {
+	if (typeof window !== 'undefined' && window.location.protocol) {
+		return window.location.protocol.replace(':', '') as 'http' | 'https';
+	}
 	return isLocalDomain(domain) ? 'http' : 'https';
 }
 
@@ -52,7 +65,8 @@ export function schemeFor(domain: string): 'http' | 'https' {
  */
 export function getProjectUrl(projectName: string, config?: RoutingConfig): string {
 	const cfg = config ?? get(routingConfig);
-	const domain = cfg.baseDomain || 'localhost:8090';
+	const domain =
+		cfg.baseDomain || (typeof window !== 'undefined' ? window.location.host : 'localhost:8090');
 	const scheme = schemeFor(domain);
 
 	if (cfg.mode === 'subdomain') {
@@ -73,7 +87,8 @@ export function getServiceUrl(
 	config?: RoutingConfig
 ): string {
 	const cfg = config ?? get(routingConfig);
-	const domain = cfg.baseDomain || 'localhost:8090';
+	const domain =
+		cfg.baseDomain || (typeof window !== 'undefined' ? window.location.host : 'localhost:8090');
 	const scheme = schemeFor(domain);
 
 	if (cfg.mode === 'subdomain') {

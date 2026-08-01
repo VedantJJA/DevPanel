@@ -474,8 +474,16 @@ func HandleSettings(database *db.DB) http.HandlerFunc {
 			if _, ok := settings["routing_mode"]; !ok {
 				settings["routing_mode"] = "path"
 			}
-			if _, ok := settings["base_domain"]; !ok {
-				settings["base_domain"] = "localhost:8090"
+			reqHost := r.Header.Get("X-Forwarded-Host")
+			if reqHost == "" {
+				reqHost = r.Host
+			}
+			if storedDomain, ok := settings["base_domain"]; !ok || storedDomain == "" || storedDomain == "localhost:8090" {
+				if reqHost != "" {
+					settings["base_domain"] = reqHost
+				} else {
+					settings["base_domain"] = "localhost:8090"
+				}
 			}
 			json.NewEncoder(w).Encode(settings)
 

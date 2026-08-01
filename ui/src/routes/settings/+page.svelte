@@ -39,7 +39,7 @@
 				if (s.github_username) githubUsername = s.github_username;
 				if (s.github_token) githubToken = s.github_token;
 				if (s.routing_mode) routingMode = s.routing_mode;
-				if (s.base_domain) baseDomain = s.base_domain;
+				baseDomain = (typeof window !== 'undefined' && window.location.host) || s.base_domain || 'localhost:8090';
 			}
 			const sRes = await fetch('/api/system/stats');
 			if (sRes.ok) { const s = await sRes.json(); systemStats = { ...systemStats, ...s }; }
@@ -61,7 +61,7 @@
 		await fetch('/api/settings', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ routing_mode: routingMode, base_domain: baseDomain })
+			body: JSON.stringify({ routing_mode: routingMode })
 		});
 		saveMessage = 'Project routing settings saved successfully!';
 		setTimeout(() => (saveMessage = null), 3000);
@@ -140,29 +140,26 @@
 				<section class="card-surface p-5 space-y-6">
 					<div>
 						<h2 class="font-bold text-base">Project Hosting & Domain Routing</h2>
-						<p class="text-sm" style="color: var(--on-surface-variant)">Select how hosted projects are accessed publicly. Set your server's domain or IP below.</p>
+						<p class="text-sm" style="color: var(--on-surface-variant)">Select how hosted projects are accessed publicly. Server domain and IP are auto-detected.</p>
 					</div>
 
-					<!-- Step 1: Server Domain -->
+					<!-- Step 1: Auto-Detected Panel Domain -->
 					<div class="space-y-2">
-						<label for="baseDomainInput" class="block text-sm font-semibold">
+						<div class="block text-sm font-semibold">
 							<span class="flex items-center gap-2">
 								<span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white" style="background-color: var(--primary)">1</span>
-								Server Domain / Public Address
+								Server Domain / Public Address (Auto-Detected)
 							</span>
-						</label>
-						<input
-							id="baseDomainInput"
-							type="text"
-							bind:value={baseDomain}
-							placeholder="e.g. klouds.online  or  140.245.xx.xx  or  localhost:8090"
-							style={inputStyle}
-							onfocus={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; }}
-							onblur={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--outline-variant)'; }}
-						/>
+						</div>
+						<div class="flex items-center justify-between rounded-lg border p-3 text-sm font-mono" style="border-color: var(--outline-variant); background-color: var(--surface-low)">
+							<div class="flex items-center gap-2">
+								<span class="material-symbols-outlined text-primary" style="font-size: 18px">language</span>
+								<span class="font-bold" style="color: var(--on-surface)">{baseDomain}</span>
+							</div>
+							<span class="text-xs font-semibold px-2.5 py-0.5 rounded-full" style="background-color: var(--primary-fixed); color: var(--primary)">Auto-Detected</span>
+						</div>
 						<p class="text-xs" style="color: var(--on-surface-variant)">
-							Enter your Oracle Cloud public IP or your custom domain (without <code>http://</code> or trailing slash).
-							Leave <code>localhost:8090</code> for local development only.
+							DevPanel automatically retrieves your domain or public IP from browser connections (<code>window.location.host</code> / <code>Host</code> header).
 						</p>
 
 						<!-- Live URL preview -->
@@ -217,7 +214,7 @@
 							<span class="material-symbols-outlined shrink-0" style="font-size: 18px">warning</span>
 							<div>
 								<p class="font-bold">Subdomain routing won't work with <code>localhost</code></p>
-								<p class="mt-1">Browsers don't support wildcard subdomains on localhost. Set your Oracle Cloud public IP or domain above (Step 1) first, then re-enable subdomain routing.</p>
+								<p class="mt-1">Browsers don't support wildcard subdomains on localhost. Access DevPanel via your server IP or custom domain to use subdomain routing.</p>
 							</div>
 						</div>
 						{/if}
@@ -244,7 +241,7 @@
 									</tr>
 								</tbody>
 							</table>
-							<p style="color: var(--on-surface-variant)">Add a wildcard <code>A</code> record pointing <code>*</code> to your Oracle Cloud IP. This makes <code>vtopcc.{baseDomain.split(':')[0]}</code>, <code>myapp.{baseDomain.split(':')[0]}</code>, etc. all resolve to your server.</p>
+							<p style="color: var(--on-surface-variant)">Add a wildcard <code>A</code> record pointing <code>*</code> to your server IP. This makes <code>vtopcc.{baseDomain.split(':')[0]}</code>, <code>myapp.{baseDomain.split(':')[0]}</code>, etc. all resolve to your server.</p>
 						</div>
 						{/if}
 					</div>

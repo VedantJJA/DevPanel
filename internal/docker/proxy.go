@@ -164,11 +164,20 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 					break
 				}
 			}
+			// If serviceName was extracted from path (e.g. /app/project/api/...) but does not match
+			// any actual service name in the project, clear serviceName so it isn't treated as a sub-service.
+			if targetSvc == nil {
+				serviceName = ""
+			}
 		}
 
-		// Intelligent routing fallback when serviceName is omitted:
-		// If request path is an API call (/api/*), route to "web" service (backend API)!
-		if targetSvc == nil && (strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api") {
+		// Intelligent routing fallback when serviceName is omitted or un-matched:
+		// If request path is an API call (/api/*, /app/<project>/api/*, etc.), route to "web" service (backend API)!
+		isApiReq := strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" ||
+			strings.Contains(r.URL.Path, "/api/") ||
+			strings.HasPrefix(r.URL.Path, fmt.Sprintf("/app/%s/api", projectName))
+
+		if targetSvc == nil && isApiReq {
 			for i := range svcs {
 				if svcs[i].Type == "web" {
 					targetSvc = &svcs[i]
@@ -315,12 +324,15 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 
 		// Strip /app/{project}/{service} or /app/{project} prefix from request path if present
 		if strings.HasPrefix(r.URL.Path, "/app/") {
-			prefixWithSvc := fmt.Sprintf("/app/%s/%s", projectName, targetSvc.Name)
-			prefixBase := fmt.Sprintf("/app/%s", projectName)
 			var relPath string
-			if strings.HasPrefix(r.URL.Path, prefixWithSvc) {
-				relPath = strings.TrimPrefix(r.URL.Path, prefixWithSvc)
-			} else {
+			if serviceName != "" {
+				prefixWithSvc := fmt.Sprintf("/app/%s/%s", projectName, serviceName)
+				if strings.HasPrefix(r.URL.Path, prefixWithSvc) {
+					relPath = strings.TrimPrefix(r.URL.Path, prefixWithSvc)
+				}
+			}
+			if relPath == "" {
+				prefixBase := fmt.Sprintf("/app/%s", projectName)
 				relPath = strings.TrimPrefix(r.URL.Path, prefixBase)
 			}
 			if relPath == "" || !strings.HasPrefix(relPath, "/") {

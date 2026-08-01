@@ -93,7 +93,7 @@
 
 				const newEvents: { time: string; kind: 'success' | 'error' | 'warning' | 'info'; text: string }[] = [];
 				for (const bp of blueprints) {
-					const timeStr = formatTimeAgo(bp.created_at || bp.updated_at || '');
+					const timeStr = formatTimeAgo(bp.createdAt || '');
 					if (bp.status === 'active' || bp.status === 'live' || bp.status === 'ready') {
 						newEvents.push({ time: timeStr, kind: 'success', text: `Deploy complete — ${bp.name}` });
 					} else if (bp.status === 'error') {

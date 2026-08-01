@@ -258,7 +258,7 @@ func main() {
 	// Subdomain & Referer-aware root HTTP router.
 	// Routing behaviour depends on the "routing_mode" setting (path | subdomain).
 	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		routingMode, baseDomain := getRoutingMode(r.Context(), database)
+		routingMode, baseDomain := getRoutingMode(r.Context(), database, r)
 
 		host := strings.Split(r.Host, ":")[0]
 		firstSub := strings.ToLower(strings.Split(host, ".")[0])
@@ -438,11 +438,22 @@ var (
 	rmCacheMu   sync.RWMutex
 )
 
-func getRoutingMode(ctx context.Context, database *db.DB) (mode, baseDomain string) {
+func getRoutingMode(ctx context.Context, database *db.DB, r *http.Request) (mode, baseDomain string) {
+	reqHost := ""
+	if r != nil {
+		reqHost = r.Header.Get("X-Forwarded-Host")
+		if reqHost == "" {
+			reqHost = r.Host
+		}
+	}
+
 	rmCacheMu.RLock()
 	if time.Since(rmCacheAt) < 30*time.Second {
 		m, d := rmCache, bdCache
 		rmCacheMu.RUnlock()
+		if (d == "" || d == "localhost:8090") && reqHost != "" {
+			d = reqHost
+		}
 		return m, d
 	}
 	rmCacheMu.RUnlock()
@@ -454,8 +465,12 @@ func getRoutingMode(ctx context.Context, database *db.DB) (mode, baseDomain stri
 	if m == "" {
 		m = "path"
 	}
-	if d == "" {
-		d = "localhost:8090"
+	if d == "" || d == "localhost:8090" {
+		if reqHost != "" {
+			d = reqHost
+		} else {
+			d = "localhost:8090"
+		}
 	}
 	rmCache = m
 	bdCache = d
