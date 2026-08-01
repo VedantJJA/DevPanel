@@ -1,17 +1,140 @@
 @import 'tailwindcss';
 
+/*
+ * DevPanel design system — "Azure Precision"
+ * Ported from cloud-render-studio
+ */
+
 @custom-variant dark (&:where(.dark, .dark *));
 
-:root { color-scheme: light; }
-:root.dark { color-scheme: dark; }
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--on-surface);
+  --color-surface: var(--surface);
+  --color-surface-lowest: var(--surface-lowest);
+  --color-surface-low: var(--surface-low);
+  --color-surface-container: var(--surface-container);
+  --color-surface-high: var(--surface-high);
+  --color-surface-highest: var(--surface-highest);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-primary: var(--primary);
+  --color-primary-container: var(--primary-container);
+  --color-primary-fixed: var(--primary-fixed);
+  --color-on-primary: var(--on-primary);
+  --color-secondary: var(--secondary);
+  --color-secondary-container: var(--secondary-container);
+  --color-on-secondary-container: var(--on-secondary-container);
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+  --color-error: var(--error);
+  --color-error-container: var(--error-container);
+  --color-tertiary: var(--tertiary);
+  --color-success: var(--success);
+  --color-success-container: var(--success-container);
+  --color-on-success-container: var(--on-success-container);
+  --color-warning: var(--warning);
+  --color-warning-container: var(--warning-container);
+  --color-inverse-surface: var(--inverse-surface);
+  --color-inverse-on-surface: var(--inverse-on-surface);
+  --color-border: var(--outline-variant);
 
-.dark .bg-white { background-color: #111827 !important; }
-.dark .bg-gray-50, .dark .bg-gray-50\/50 { background-color: #0b1220 !important; }
-.dark .bg-gray-100 { background-color: #1f2937 !important; }
-.dark .bg-blue-50 { background-color: #172554 !important; }
-.dark .bg-green-50 { background-color: #052e24 !important; }
-.dark .border-gray-100, .dark .border-gray-200, .dark .border-gray-300 { border-color: #334155 !important; }
-.dark .divide-gray-100 > :not(:last-child) { border-color: #334155 !important; }
-.dark .text-gray-900, .dark .text-gray-800, .dark .text-gray-700 { color: #f1f5f9 !important; }
-.dark .text-gray-600, .dark .text-gray-500, .dark .text-gray-400 { color: #94a3b8 !important; }
-.dark input, .dark select, .dark textarea { background-color: #0f172a !important; color: #f8fafc !important; border-color: #475569 !important; }
+  --font-display: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+
+  --spacing-gutter: 24px;
+  --spacing-sidebar: 260px;
+}
+
+:root {
+  color-scheme: light;
+  --primary: oklch(0.4845 0.2111 261.13);
+  --primary-container: oklch(0.5723 0.2275 262.29);
+  --on-primary: oklch(1 0 89.88);
+  --background: oklch(0.9826 0.0095 299.24);
+  --surface: oklch(0.9826 0.0095 299.24);
+  --surface-lowest: oklch(1 0 89.88);
+  --surface-low: oklch(0.9669 0.016 282.28);
+  --surface-container: oklch(0.9491 0.0244 278.37);
+  --surface-high: oklch(0.9314 0.0329 276.38);
+  --surface-highest: oklch(0.915 0.0378 272.52);
+  --on-surface: oklch(0.2247 0.0391 265.98);
+  --on-surface-variant: oklch(0.3964 0.0259 273.44);
+  --outline: oklch(0.5692 0.0263 277.6);
+  --outline-variant: oklch(0.8298 0.0253 278.29);
+  --secondary: oklch(0.4822 0.077 254.45);
+  --secondary-container: oklch(0.8436 0.0751 257.22);
+  --on-secondary-container: oklch(0.4531 0.077 253.39);
+  --error: oklch(0.506 0.1927 27.7);
+  --error-container: oklch(0.9183 0.0418 25.23);
+  --tertiary: oklch(0.488 0.144 43.2);
+  --primary-fixed: oklch(0.9145 0.0414 276.59);
+  --inverse-surface: oklch(0.3109 0.0378 267.38);
+  --inverse-on-surface: oklch(0.958 0.0202 279.94);
+  --success: oklch(0.6271 0.1699 149.21);
+  --success-container: oklch(0.9624 0.0434 156.74);
+  --on-success-container: oklch(0.5273 0.1371 150.07);
+  --warning: oklch(0.5553 0.1455 49);
+  --warning-container: oklch(0.9619 0.058 95.62);
+}
+
+* {
+  border-color: var(--outline-variant);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--on-surface);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--outline-variant);
+  border-radius: 10px;
+}
+
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+.label-caps {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.card-surface {
+  background-color: var(--surface-lowest);
+  border: 1px solid var(--outline-variant);
+  border-radius: 0.75rem;
+}

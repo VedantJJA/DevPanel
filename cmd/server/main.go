@@ -202,13 +202,16 @@ func main() {
 	mux.HandleFunc("/ws/stats", docker.AuthMiddleware(database, docker.HandleStatsWS(dockClient)))
 	mux.HandleFunc("/ws/logs", docker.AuthMiddleware(database, docker.HandleLogsWS(dockClient)))
 
-	// --- 4. Embedded Svelte Frontend SPA Handler -----------------------------
+	// Reverse proxy route for /app/{project}/{service}/
+	mux.HandleFunc("/app/", docker.HandleProjectReverseProxy(database, dockClient))
+
+	// Embedded Svelte Frontend SPA Handler
 	uiContent := ui.FS()
 	fileServer := http.FileServer(http.FS(uiContent))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Do not return SPA 200.html fallback for API or WebSocket endpoints
-		if strings.HasPrefix(r.URL.Path, "/api") || strings.HasPrefix(r.URL.Path, "/ws") || r.URL.Path == "/ask" || r.URL.Path == "/healthz" {
+		// Do not return SPA 200.html fallback for API, reverse proxy, or WebSocket endpoints
+		if strings.HasPrefix(r.URL.Path, "/api") || strings.HasPrefix(r.URL.Path, "/ws") || strings.HasPrefix(r.URL.Path, "/app") || r.URL.Path == "/ask" || r.URL.Path == "/healthz" {
 			http.NotFound(w, r)
 			return
 		}

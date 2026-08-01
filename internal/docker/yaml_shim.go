@@ -54,8 +54,32 @@ func parseBlueprintYAML(data []byte, v interface{}) error {
 				buildMap["engine"] = renderEnv
 			}
 
+			// Runtime-aware defaults for Render blueprints
+			if rootBuildCmd == "" {
+				if renderEnv == "python" || renderEnv == "python3" {
+					rootBuildCmd = "pip install -r requirements.txt"
+				} else if renderEnv == "go" {
+					rootBuildCmd = "go build -o server ."
+				} else if renderEnv == "rust" {
+					rootBuildCmd = "cargo build --release"
+				} else if renderEnv == "ruby" {
+					rootBuildCmd = "bundle install"
+				}
+			}
+			if rootStartCmd == "" {
+				if renderEnv == "python" || renderEnv == "python3" {
+					rootStartCmd = "python app.py"
+				} else if renderEnv == "go" {
+					rootStartCmd = "./server"
+				} else if renderEnv == "rust" {
+					rootStartCmd = "./target/release/app"
+				} else if renderEnv == "ruby" {
+					rootStartCmd = "bundle exec rackup -p 8080"
+				}
+			}
+
 			deployMap := make(map[string]interface{})
-			if cmd, ok := s["startCommand"].(string); ok {
+			if cmd, ok := s["startCommand"].(string); ok && cmd != "" {
 				rootStartCmd = cmd
 			}
 

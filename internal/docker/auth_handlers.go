@@ -45,9 +45,13 @@ func setSessionCookie(w http.ResponseWriter, token string) {
 // AuthMiddleware wraps an http.Handler and enforces authentication
 func AuthMiddleware(database *db.DB, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("devpanel_session")
 		dbSession, _ := database.GetSetting(r.Context(), "admin_session_token")
-		if err != nil || cookie.Value == "" || dbSession == "" || cookie.Value != dbSession {
+		if dbSession == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		cookie, err := r.Cookie("devpanel_session")
+		if err != nil || cookie.Value == "" || cookie.Value != dbSession {
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(ErrorResponse{Error: "Unauthorized"})
 			return

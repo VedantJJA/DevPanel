@@ -1,38 +1,54 @@
-# Binaries
+# Binaries & Executables
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 devpnl
+devpnl.exe
 devpanel
 devpanel_*
+tmp.exe
 !devpanel_yaml_format.md
 
-# Build output
+# Build Output
 /bin/
 /dist/
+/build/
 
-# Go
+# Go Artifacts
 *.test
 *.out
 go.work
 go.work.sum
 
-# UI / Node
+# UI / Node.js
+node_modules/
 ui/node_modules/
 ui/build/
 ui/.svelte-kit/
 ui/.vite/
 .svelte-kit/
 
-# SQLite
+# Database & Persistent Data
+data/
 *.db
 *.db-journal
 *.db-shm
 *.db-wal
 
-# IDE / Editor
+# Local Design Mock References
+stitch_modern_cloud_platform_dashboard/
+stitch_modern_cloud_platform_dashboard(1)/
+cloud-render-studio/
+template.tsx
+
+# Environment & Credentials
+.env
+.env.*
+!.env.example
+
+# IDE & Editor Files
 .vscode/
 .idea/
 .agents/
@@ -40,15 +56,10 @@ ui/.vite/
 *.swo
 *~
 
-# OS
+# Operating System Files
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Environment
-.env
-.env.*
-!.env.example
-
-# Docker (local dev artifacts)
+# Docker local dev artifacts
 docker-compose.override.yml

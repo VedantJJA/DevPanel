@@ -1,32 +1,25 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import EnvVarEditor from '$lib/components/EnvVarEditor.svelte';
+	import AppShell from '$lib/components/AppShell.svelte';
 	import { scanRepo, createProject, triggerDeploy } from '$lib/api';
-	import type { ScanResult } from '$lib/types';
+	import type { ScanResult, SystemStats } from '$lib/types';
 
-	let step = $state<1 | 2 | 3>(1);
-
-	// Service types configuration matching template
-	const SERVICE_TYPES = [
-		{ id: 'repo', title: 'Deploy from Repository', desc: 'Auto-detect services from devpanel.yaml', icon: 'layers', color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200', needsRepo: true },
-		{ id: 'web', title: 'Web Service', desc: 'Node, Python, Go, Ruby, Docker', icon: 'server', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: true },
-		{ id: 'static', title: 'Static Site', desc: 'React, Vue, Astro, HTML/CSS', icon: 'globe', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: true },
-		{ id: 'postgres', title: 'PostgreSQL', desc: 'Managed relational database', icon: 'database', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: false },
-		{ id: 'redis', title: 'Redis', desc: 'Managed in-memory cache', icon: 'database', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: false },
-		{ id: 'cron', title: 'Cron Job', desc: 'Scheduled tasks and scripts', icon: 'clock', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: true }
-	];
-
-	// Selection State
+	let step = $state(1); // 1: Select Type, 2: Connect Repo, 3: Configure Service, 4: Review & Deploy
 	let selectedType = $state<any>(null);
 	let selectedRepo = $state<any>(null);
 
 	// User & Repos State
-	let storedGithubUsername = $state('');
+	let storedGithubUsername = $state('VedantJJA');
+	let storedGithubToken = $state('');
 	let userRepos = $state<any[]>([]);
 	let isFetchingRepos = $state(false);
 	let repoFetchError = $state<string | null>(null);
 	let isAuthenticated = $state(false);
+	let repoSearchQuery = $state('');
+	let patInput = $state('');
+	let isSavingPat = $state(false);
+	let patSaveSuccess = $state<string | null>(null);
 
 	// Service Form Configuration State
 	let appName = $state('my-awesome-app');
@@ -51,15 +44,46 @@
 		blueprint: any;
 	} | null>(null);
 
-	async function fetchUserRepos(username: string) {
-		if (!username.trim()) return;
+	let systemStats = $state<SystemStats>({ totalContainers: 0, activeContainers: 0, stoppedContainers: 0, totalMemMb: 0, usedMemMb: 0, memPercent: 0, cpus: 1 });
+
+	let filteredRepos = $derived(
+		userRepos.filter((r) =>
+			(r.full_name || r.name || '').toLowerCase().includes(repoSearchQuery.toLowerCase().trim())
+		)
+	);
+
+	const SERVICE_TYPES = [
+		{ id: 'repo', title: 'Deploy from Repository', desc: 'Auto-detect services from devpanel.yaml', icon: 'layers', color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200', needsRepo: true },
+		{ id: 'web', title: 'Web Service', desc: 'Node, Python, Go, Ruby, Docker', icon: 'server', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: true },
+		{ id: 'static', title: 'Static Site', desc: 'React, Vue, Astro, HTML/CSS', icon: 'globe', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: true },
+		{ id: 'postgres', title: 'PostgreSQL', desc: 'Managed relational database', icon: 'database', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: false },
+		{ id: 'redis', title: 'Redis', desc: 'Managed in-memory cache', icon: 'database', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: false },
+		{ id: 'cron', title: 'Cron Job', desc: 'Scheduled tasks and scripts', icon: 'clock', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200', needsRepo: true }
+	];
+
+	async function loadGithubSettings() {
+		try {
+			const res = await fetch('/api/settings');
+			if (res.ok) {
+				const s = await res.json();
+				if (s.github_username) storedGithubUsername = s.github_username;
+				if (s.github_token) storedGithubToken = s.github_token;
+			}
+		} catch (e) {
+			console.error('Failed to load settings:', e);
+		}
+	}
+
+	async function fetchUserRepos(username: string = '') {
 		isFetchingRepos = true;
 		repoFetchError = null;
 		try {
-			const res = await fetch(`/api/repos/user?username=${encodeURIComponent(username.trim())}`);
+			const u = username.trim() || storedGithubUsername.trim();
+			const url = u ? `/api/repos/user?username=${encodeURIComponent(u)}` : '/api/repos/user';
+			const res = await fetch(url);
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({ error: 'Failed to fetch repositories' }));
-				throw new Error(err.error || 'Failed to load GitHub user repositories');
+				throw new Error(err.error || 'Failed to load GitHub repositories');
 			}
 			const data = await res.json();
 			userRepos = data.repos || [];
@@ -68,6 +92,27 @@
 			repoFetchError = err.message;
 		} finally {
 			isFetchingRepos = false;
+		}
+	}
+
+	async function savePatAndAuthorize() {
+		if (!patInput.trim()) return;
+		isSavingPat = true;
+		patSaveSuccess = null;
+		try {
+			await fetch('/api/settings', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ github_username: storedGithubUsername, github_token: patInput.trim() })
+			});
+			storedGithubToken = patInput.trim();
+			patSaveSuccess = 'GitHub Personal Access Token authorized successfully!';
+			patInput = '';
+			await fetchUserRepos();
+		} catch (e: any) {
+			repoFetchError = `Failed to authorize token: ${e.message}`;
+		} finally {
+			isSavingPat = false;
 		}
 	}
 
@@ -93,9 +138,7 @@
 
 		if (type.needsRepo) {
 			step = 2;
-			if (storedGithubUsername) {
-				fetchUserRepos(storedGithubUsername);
-			}
+			fetchUserRepos();
 		} else {
 			step = 3;
 		}
@@ -107,18 +150,49 @@
 		if (repo.name) {
 			appName = repo.name.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
 		}
+		const lang = (repo.language || repo.name || '').toLowerCase();
+		if (lang.includes('python') || lang.includes('py')) {
+			runtime = 'Python';
+			buildCommand = 'pip install -r requirements.txt';
+			startCommand = 'python app.py';
+			containerPort = 8080;
+		} else if (lang.includes('go')) {
+			runtime = 'Go';
+			buildCommand = 'go build -o server .';
+			startCommand = './server';
+			containerPort = 8080;
+		} else if (lang.includes('rust')) {
+			runtime = 'Rust';
+			buildCommand = 'cargo build --release';
+			startCommand = './target/release/app';
+			containerPort = 8080;
+		} else if (lang.includes('ruby')) {
+			runtime = 'Ruby';
+			buildCommand = 'bundle install';
+			startCommand = 'bundle exec rackup -p 8080';
+			containerPort = 8080;
+		} else {
+			runtime = 'Node.js';
+			if (selectedType?.id === 'static') {
+				buildCommand = 'npm install && npm run build';
+				containerPort = 80;
+			} else {
+				buildCommand = 'npm install && npm run build';
+				startCommand = 'npm start';
+				containerPort = 8080;
+			}
+		}
 		step = 3;
 	}
 
-	async function prepareDeploy() {
+	async function goToReview() {
+		deployError = null;
 		if (selectedType?.needsRepo && !repoUrl.trim()) {
 			deployError = 'Repository URL is required';
 			return;
 		}
 
 		isDeploying = true;
-		deployError = null;
-
 		try {
 			let scanResult: ScanResult | null = null;
 
@@ -126,78 +200,44 @@
 				try {
 					scanResult = await scanRepo(repoUrl.trim(), appName.trim());
 				} catch (e) {
-					console.log('No devpanel.yaml found, using explicit UI form parameters');
+					console.warn('Repository scan warning:', e);
 				}
 			}
 
-			let serviceType: 'web' | 'static' | 'database' | 'worker' = 'web';
-			let image = '';
-
-			switch (selectedType?.id) {
-				case 'static':
-					serviceType = 'static';
-					break;
-				case 'postgres':
-					serviceType = 'database';
-					image = `postgres:${dbVersion}-alpine`;
-					if (!envVars['POSTGRES_PASSWORD']) envVars['POSTGRES_PASSWORD'] = 'postgres';
-					if (!envVars['POSTGRES_DB']) envVars['POSTGRES_DB'] = appName.replace(/-/g, '_');
-					break;
-				case 'redis':
-					serviceType = 'database';
-					image = 'redis:7-alpine';
-					break;
-				case 'cron':
-					serviceType = 'worker';
-					startCommand = cronTask === 'Sync Users' ? 'python sync_users.py' : 'python run.py';
-					break;
-				default:
-					serviceType = 'web';
-					break;
-			}
-
-			const payloadServices = (scanResult?.services && scanResult.services.length > 0)
-				? scanResult.services.map((s) => ({
-						name: s.name,
-						type: s.type,
-						env_vars: { ...s.defaults?.env, ...envVars },
-						port: s.defaults?.port || containerPort,
-						custom_domain: '',
-						auto_deploy: true,
-						build_command: s.build?.command || buildCommand,
-						start_command: s.deploy?.command || startCommand,
-						instance_type: 'starter'
-				  }))
-				: [{
-						name: appName.trim(),
-						type: serviceType,
-						image: image,
-						env_vars: envVars,
-						port: containerPort,
-						custom_domain: '',
-						auto_deploy: true,
-						build_command: buildCommand,
-						start_command: startCommand,
-						instance_type: 'starter'
-				  }];
-
-			const blueprint = scanResult?.blueprint || {
-				version: '1.0',
-				project: appName.trim(),
-				services: {
-					[appName.trim()]: {
-						type: serviceType,
-						image: image,
-						source: { directory: '.', ref: 'main' },
-						build: { engine: serviceType === 'static' ? 'static' : 'node', command: buildCommand, output_dir: publishDir },
-						deploy: { port: containerPort, env: envVars }
+			let payloadServices: any[] = [];
+			if (selectedType?.id === 'repo' && scanResult && scanResult.services && scanResult.services.length > 0) {
+				payloadServices = scanResult.services.map((s: any) => ({
+					name: s.name || appName.trim() || 'my-service',
+					type: s.type || 'web',
+					image: s.image || '',
+					port: Number(s.default?.port || s.port || (s.type === 'static' ? 80 : 8080)),
+					env_vars: s.default?.env || s.env_vars || {},
+					build_command: s.buildCommand || s.build?.command || '',
+					start_command: s.startCommand || s.deploy?.command || ''
+				}));
+			} else {
+				payloadServices = [
+					{
+						name: appName.trim() || 'my-app',
+						type: selectedType?.id === 'repo' ? 'web' : selectedType?.id,
+						port: Number(containerPort) || 80,
+						env_vars: envVars || {},
+						build_command: buildCommand || '',
+						start_command: startCommand || ''
 					}
-				}
+				];
+			}
+
+			const blueprint = {
+				name: appName.trim() || 'my-blueprint',
+				repo_url: selectedType?.needsRepo ? repoUrl.trim() : '',
+				services: payloadServices
 			};
 
 			preDeployData = { scanResult, payloadServices, blueprint };
+			step = 4;
 		} catch (err: any) {
-			deployError = err.message || 'Failed to prepare deployment configuration';
+			deployError = err.message || 'Failed to prepare deployment preview';
 		} finally {
 			isDeploying = false;
 		}
@@ -207,34 +247,35 @@
 		if (!preDeployData) return;
 		isDeploying = true;
 		deployError = null;
-
 		try {
-			const createRes = await createProject({
-				app_name: appName.trim(),
-				repo_url: selectedType?.needsRepo ? repoUrl.trim() : '',
+			const project = await createProject({
+				app_name: appName.trim() || preDeployData.blueprint.name || 'my-app',
+				repo_url: preDeployData.blueprint.repo_url || repoUrl.trim(),
 				blueprint: preDeployData.blueprint,
 				services: preDeployData.payloadServices
 			});
-
-			const createdProjectId = createRes.blueprint?.id || appName.trim();
-			await triggerDeploy(createdProjectId);
-			goto(`/projects/${createdProjectId}`);
+			await triggerDeploy(project.blueprint.id);
+			goto(`/projects/${project.blueprint.id}?tab=logs&deploying=true`);
 		} catch (err: any) {
-			deployError = err.message || 'Failed to create and deploy service';
-		} finally {
+			deployError = err.message || 'Deployment execution failed';
 			isDeploying = false;
-			preDeployData = null;
 		}
 	}
 
-	onMount(() => {
-		if (typeof window !== 'undefined') {
-			storedGithubUsername = localStorage.getItem('devpnl_gh_username') || '';
-		}
+	onMount(async () => {
+		await loadGithubSettings();
+		try {
+			const sRes = await fetch('/api/system/stats');
+			if (sRes.ok) {
+				const s = await sRes.json();
+				systemStats = { ...systemStats, ...s };
+			}
+		} catch (e) { console.error(e); }
 	});
 </script>
 
-<div class="p-6 md:p-10 max-w-5xl mx-auto w-full font-sans antialiased text-gray-900">
+<AppShell {systemStats}>
+<div class="max-w-5xl mx-auto w-full" style="color: var(--on-surface)">
 	<button
 		type="button"
 		onclick={() => {
@@ -297,326 +338,304 @@
 			<div>
 				<h2 class="text-2xl font-bold text-gray-900">Connect a repository</h2>
 				<p class="text-sm text-gray-500 mt-1">
-					{#if storedGithubUsername}
-						Showing repositories for GitHub user <span class="font-semibold text-gray-800">{storedGithubUsername}</span>.
-					{:else}
-						No GitHub username configured in Settings. Enter a direct repository link below or set your username in Settings.
-					{/if}
+					Select a repository from your connected GitHub account or authorize access via Personal Access Token.
 				</p>
 			</div>
 
-			{#if storedGithubUsername}
-				<div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-					<div class="p-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-						<div class="flex items-center gap-2 text-sm font-medium text-gray-700">
-							<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
-							<span>GitHub Repositories</span>
-							{#if isAuthenticated}
-								<span class="ml-2 inline-flex items-center rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">Authenticated (Private Repos Enabled)</span>
-							{:else}
-								<span class="ml-2 inline-flex items-center rounded-md bg-yellow-50 px-2 py-1 text-xs font-medium text-yellow-800 ring-1 ring-inset ring-yellow-600/20">Public Only</span>
-							{/if}
-						</div>
-						<span class="text-sm text-gray-500 font-mono">@{storedGithubUsername}</span>
+			<!-- GitHub Account Status & PAT Authorization Bar -->
+			<div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm p-4 space-y-4">
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div class="flex items-center gap-2 text-sm font-medium text-gray-700">
+						<svg class="w-5 h-5 text-gray-800" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+						<span>GitHub Account</span>
+						{#if isAuthenticated}
+							<span class="inline-flex items-center rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">Authenticated (Private Repos &amp; Webhooks Enabled)</span>
+						{:else}
+							<span class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-1 text-xs font-medium text-yellow-800 ring-1 ring-inset ring-yellow-600/20">Public Repos Only</span>
+						{/if}
 					</div>
-
-					{#if isFetchingRepos}
-						<div class="p-8 text-center text-gray-500">
-							<svg class="w-6 h-6 animate-spin mx-auto text-blue-600 mb-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-							<span>Fetching repositories for @{storedGithubUsername}...</span>
-						</div>
-					{:else if repoFetchError}
-						<div class="p-6 text-center text-red-600 bg-red-50 text-sm">
-							{repoFetchError}
-						</div>
-					{:else if userRepos.length === 0}
-						<div class="p-8 text-center text-gray-500 text-sm">
-							No repositories found for @{storedGithubUsername}. Enter a direct URL below.
-						</div>
-					{:else}
-						<div class="divide-y divide-gray-100 max-h-80 overflow-y-auto">
-							{#each userRepos as repo}
-								<div class="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
-									<div class="flex items-center gap-3">
-										<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-										<div>
-											<div class="font-medium text-gray-900">{repo.full_name || repo.name}</div>
-											<div class="text-xs text-gray-500">Updated {repo.updated}</div>
-										</div>
-									</div>
-									<button
-										type="button"
-										onclick={() => handleRepoSelect(repo)}
-										class="px-4 py-1.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-									>
-										Connect
-									</button>
-								</div>
-							{/each}
-						</div>
+					{#if storedGithubUsername}
+						<span class="text-sm font-mono text-gray-500">@{storedGithubUsername}</span>
 					{/if}
 				</div>
-			{/if}
 
-			<!-- Fallback Direct Repo URL Box -->
-			<div class="bg-white border border-gray-200 rounded-xl p-6 shadow-sm space-y-4">
-				<h3 class="text-sm font-semibold text-gray-900 uppercase tracking-wider">Or Enter Direct Repository URL</h3>
-				<div>
-					<label for="directRepoUrl" class="block text-sm font-medium text-gray-700 mb-1.5">Git Repository URL</label>
+				{#if patSaveSuccess}
+					<div class="text-xs text-green-700 bg-green-50 p-2.5 rounded-lg border border-green-200">
+						{patSaveSuccess}
+					</div>
+				{/if}
+
+				{#if !isAuthenticated}
+					<div class="pt-3 border-t border-gray-100 space-y-2">
+						<label for="ghPatQuick" class="block text-xs font-semibold text-gray-700">Authorize App &amp; Enable Webhooks (GitHub Personal Access Token)</label>
+						<div class="flex gap-2">
+							<input
+								id="ghPatQuick"
+								type="password"
+								bind:value={patInput}
+								placeholder="ghp_… (Personal Access Token with repo scope)"
+								class="flex-1 rounded-lg border border-gray-300 p-2 text-xs font-mono outline-none focus:border-blue-500"
+							/>
+							<button
+								type="button"
+								onclick={savePatAndAuthorize}
+								disabled={isSavingPat || !patInput.trim()}
+								class="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+							>
+								{isSavingPat ? 'Authorizing...' : 'Authorize & Fetch Repos'}
+							</button>
+						</div>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Search Filter & Repo List Card -->
+			<div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+				<div class="p-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between gap-4">
+					<div class="relative flex-1">
+						<svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+						<input
+							type="text"
+							bind:value={repoSearchQuery}
+							placeholder="Search repositories by name..."
+							class="w-full pl-9 pr-4 py-2 bg-white border border-gray-300 rounded-lg text-sm outline-none focus:border-blue-500"
+						/>
+					</div>
+					<button
+						type="button"
+						onclick={() => fetchUserRepos()}
+						class="text-xs text-blue-600 font-semibold hover:underline flex items-center gap-1"
+					>
+						<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+						Refresh
+					</button>
+				</div>
+
+				{#if isFetchingRepos}
+					<div class="p-8 text-center text-gray-500">
+						<svg class="w-6 h-6 animate-spin mx-auto text-blue-600 mb-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+						<span>Fetching repositories from GitHub...</span>
+					</div>
+				{:else if repoFetchError}
+					<div class="p-6 text-center text-red-600 bg-red-50 text-sm">
+						{repoFetchError}
+					</div>
+				{:else if filteredRepos.length === 0}
+					<div class="p-8 text-center text-gray-500 text-sm">
+						{userRepos.length === 0 ? 'No repositories found for this account. Enter a direct URL below or authorize token above.' : `No repositories match "${repoSearchQuery}".`}
+					</div>
+				{:else}
+					<div class="divide-y divide-gray-100 max-h-80 overflow-y-auto">
+						{#each filteredRepos as repo}
+							<div class="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+								<div class="flex items-center gap-3">
+									<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+									<div>
+										<div class="flex items-center gap-2">
+											<span class="font-medium text-gray-900">{repo.full_name || repo.name}</span>
+											{#if repo.private}
+												<span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold text-gray-600">Private</span>
+											{/if}
+										</div>
+										<div class="text-xs text-gray-500">{repo.description || `Updated ${repo.updated}`}</div>
+									</div>
+								</div>
+								<button
+									type="button"
+									onclick={() => handleRepoSelect(repo)}
+									class="px-4 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+								>
+									Connect Repository
+								</button>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+
+			<!-- Direct Repository URL Fallback -->
+			<div class="bg-gray-50 border border-gray-200 rounded-xl p-5 space-y-3">
+				<h3 class="text-sm font-semibold text-gray-900">Or enter a public repository URL directly</h3>
+				<div class="flex gap-2">
 					<input
-						id="directRepoUrl"
-						type="url"
+						type="text"
 						bind:value={repoUrl}
 						placeholder="https://github.com/username/repository"
-						class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 focus:outline-none focus:border-blue-500 font-mono text-xs shadow-sm"
+						class="flex-1 rounded-lg border border-gray-300 p-2.5 text-sm font-mono outline-none focus:border-blue-500"
 					/>
-				</div>
-				<div class="flex justify-end">
 					<button
 						type="button"
 						onclick={() => (step = 3)}
-						class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm rounded-lg transition-colors shadow-sm"
+						class="px-5 py-2.5 bg-gray-900 text-white text-sm font-semibold rounded-lg hover:bg-gray-800 transition-colors"
 					>
-						Continue with URL →
+						Use Direct URL
 					</button>
 				</div>
 			</div>
 		</div>
 	{/if}
 
-	<!-- Step 3: Dynamic Configure View per Service Type -->
-	{#if step === 3 && selectedType}
-		<div class="max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+	<!-- Step 3: Configure Service -->
+	{#if step === 3}
+		<div class="max-w-2xl mx-auto bg-white border border-gray-200 rounded-xl p-8 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
 			<div>
-				<h2 class="text-2xl font-bold text-gray-900">Configure {selectedType.title}</h2>
-				{#if selectedRepo}
-					<p class="text-gray-500 mt-1 flex items-center gap-2 text-sm">
-						Deploying from <span class="font-mono bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded border border-gray-200">{selectedRepo.full_name || selectedRepo.name}</span>
-					</p>
-				{/if}
+				<h2 class="text-2xl font-bold text-gray-900">Configure Service</h2>
+				<p class="text-sm text-gray-500 mt-1">Set up execution scripts, build settings, and target ports.</p>
 			</div>
 
 			{#if deployError}
-				<div class="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+				<div class="p-4 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
 					{deployError}
 				</div>
 			{/if}
 
-			<div class="bg-white border border-gray-200 rounded-xl p-6 md:p-8 shadow-sm space-y-6">
-				<!-- Common Fields -->
-				<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-					<div>
-						<label for="appDeployName" class="block text-sm font-medium text-gray-700 mb-1.5">Service Name</label>
-						<input
-							id="appDeployName"
-							type="text"
-							bind:value={appName}
-							placeholder="e.g. my-service"
-							class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm"
-						/>
-					</div>
-					<div>
-						<label for="appContainerPort" class="block text-sm font-medium text-gray-700 mb-1.5">Target Container Port</label>
-						<input
-							id="appContainerPort"
-							type="number"
-							bind:value={containerPort}
-							class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm font-mono text-sm"
-						/>
-					</div>
+			<div class="space-y-4">
+				<div>
+					<label for="appNameInput" class="block text-sm font-medium text-gray-700 mb-1">Application / Service Name</label>
+					<input id="appNameInput" type="text" bind:value={appName} class="w-full rounded-lg border border-gray-300 p-2.5 text-sm font-mono outline-none focus:border-blue-500" />
 				</div>
 
-				{#if selectedType.needsRepo}
+				{#if selectedType?.needsRepo}
 					<div>
-						<label for="appRepoUrl" class="block text-sm font-medium text-gray-700 mb-1.5">Repository URL</label>
-						<input
-							id="appRepoUrl"
-							type="text"
-							bind:value={repoUrl}
-							class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm font-mono text-xs"
-						/>
+						<label for="repoUrlInput" class="block text-sm font-medium text-gray-700 mb-1">Repository URL</label>
+						<input id="repoUrlInput" type="text" bind:value={repoUrl} class="w-full rounded-lg border border-gray-300 p-2.5 text-sm font-mono outline-none focus:border-blue-500" />
 					</div>
+
+					{#if selectedType?.id === 'web' || selectedType?.id === 'static'}
+						<div class="border-t border-b border-gray-100 py-4 space-y-3">
+							<label id="newRuntimeLabel" class="block text-xs font-bold text-gray-700 uppercase tracking-wider">Select Runtime Engine &amp; Version</label>
+							<div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+								{#each [
+									{ id: 'Node.js', label: 'Node.js', defaultBuild: 'npm install && npm run build', defaultStart: 'npm start', desc: 'Node 20-alpine / 22' },
+									{ id: 'Python', label: 'Python 3', defaultBuild: 'pip install -r requirements.txt', defaultStart: 'python app.py', desc: 'Python 3.11-slim' },
+									{ id: 'Go', label: 'Go', defaultBuild: 'go build -o server .', defaultStart: './server', desc: 'Go 1.22-alpine' },
+									{ id: 'Rust', label: 'Rust', defaultBuild: 'cargo build --release', defaultStart: './target/release/app', desc: 'Rust 1.77-slim' },
+									{ id: 'Ruby', label: 'Ruby', defaultBuild: 'bundle install', defaultStart: 'bundle exec rackup -p 8080', desc: 'Ruby 3.3-slim' },
+									{ id: 'Docker', label: 'Custom Dockerfile', defaultBuild: '', defaultStart: '', desc: 'Custom Container' }
+								] as rt}
+									<button
+										type="button"
+										onclick={() => {
+											runtime = rt.id;
+											if (rt.defaultBuild) buildCommand = rt.defaultBuild;
+											if (rt.defaultStart) startCommand = rt.defaultStart;
+											if (selectedType?.id === 'static') containerPort = 80;
+										}}
+										class="p-3 border rounded-lg text-left transition-all flex flex-col gap-1"
+										style={runtime === rt.id
+											? 'border-color: #2563eb; background-color: #eff6ff;'
+											: 'border-color: #e5e7eb; background-color: #ffffff;'}
+									>
+										<span class="font-bold text-xs text-gray-900">{rt.label}</span>
+										<span class="text-[10px] text-gray-500">{rt.desc}</span>
+									</button>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if selectedType?.id !== 'repo'}
+						<div>
+							<label for="buildCmdInput" class="block text-sm font-medium text-gray-700 mb-1">Build Command</label>
+							<input id="buildCmdInput" type="text" bind:value={buildCommand} placeholder="npm ci && npm run build" class="w-full rounded-lg border border-gray-300 p-2.5 text-sm font-mono outline-none focus:border-blue-500" />
+						</div>
+
+						{#if selectedType?.id !== 'static'}
+							<div>
+								<label for="startCmdInput" class="block text-sm font-medium text-gray-700 mb-1">Start Command</label>
+								<input id="startCmdInput" type="text" bind:value={startCommand} placeholder="npm start" class="w-full rounded-lg border border-gray-300 p-2.5 text-sm font-mono outline-none focus:border-blue-500" />
+							</div>
+						{/if}
+					{/if}
 				{/if}
 
-				<!-- Dynamic Specific Fields per Service Type -->
-				{#if selectedType.id === 'web'}
-					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-						<div class="col-span-2 md:col-span-1">
-							<label for="webRuntime" class="block text-sm font-medium text-gray-700 mb-1.5">App Framework / Runtime</label>
-							<select id="webRuntime" bind:value={runtime} onchange={() => {
-								if (runtime === 'Node.js') { buildCommand = 'npm install'; startCommand = 'npm start'; }
-								else if (runtime === 'Python') { buildCommand = 'pip install -r requirements.txt'; startCommand = 'python main.py'; }
-								else if (runtime === 'Go') { buildCommand = 'go build -o server .'; startCommand = './server'; }
-							}} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
-								<option>Node.js</option>
-								<option>Python</option>
-								<option>Go</option>
-							</select>
-						</div>
-					</div>
-				{:else if selectedType.id === 'static'}
-					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-						<div class="col-span-2 md:col-span-1">
-							<label for="staticFramework" class="block text-sm font-medium text-gray-700 mb-1.5">Static Framework</label>
-							<select id="staticFramework" onchange={(e) => {
-								const val = (e.target as HTMLSelectElement).value;
-								if (val === 'React / Vite') { buildCommand = 'npm ci && npm run build'; publishDir = 'dist'; }
-								else if (val === 'SvelteKit') { buildCommand = 'npm ci && npm run build'; publishDir = 'build'; }
-								else if (val === 'Next.js Export') { buildCommand = 'npm ci && npm run build'; publishDir = 'out'; }
-								else if (val === 'Vanilla HTML') { buildCommand = ''; publishDir = '.'; }
-							}} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
-								<option>React / Vite</option>
-								<option>SvelteKit</option>
-								<option>Next.js Export</option>
-								<option>Vanilla HTML</option>
-							</select>
-						</div>
-					</div>
-				{:else if selectedType.id === 'postgres'}
+				{#if selectedType?.id !== 'repo'}
 					<div>
-						<label for="pgVersion" class="block text-sm font-medium text-gray-700 mb-1.5">PostgreSQL Version</label>
-						<select id="pgVersion" bind:value={dbVersion} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
-							<option value="15">15 (Latest Recommended)</option>
-							<option value="14">14</option>
-							<option value="13">13</option>
-						</select>
+						<label for="portInput" class="block text-sm font-medium text-gray-700 mb-1">Container Port</label>
+						<input id="portInput" type="number" bind:value={containerPort} class="w-full rounded-lg border border-gray-300 p-2.5 text-sm font-mono outline-none focus:border-blue-500" />
 					</div>
-				{:else if selectedType.id === 'cron'}
-					<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-						<div>
-							<label for="cronSchedule" class="block text-sm font-medium text-gray-700 mb-1.5">Cron Schedule</label>
-							<select id="cronSchedule" bind:value={cronSchedule} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
-								<option value="* * * * *">Every minute (* * * * *)</option>
-								<option value="0 * * * *">Hourly (0 * * * *)</option>
-								<option value="0 0 * * *">Daily at Midnight (0 0 * * *)</option>
-							</select>
+				{:else}
+					<div class="rounded-lg bg-blue-50 border border-blue-200 p-4 text-xs text-blue-800 space-y-1">
+						<div class="font-bold flex items-center gap-1.5">
+							<svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+							<span>Blueprint Auto-Configuration</span>
 						</div>
-						<div>
-							<label for="cronTask" class="block text-sm font-medium text-gray-700 mb-1.5">Preset Task</label>
-							<select id="cronTask" bind:value={cronTask} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm">
-								<option>Sync Users</option>
-								<option>Cleanup Cache</option>
-								<option>Generate Reports</option>
-							</select>
-						</div>
+						<p>Build commands, start commands, container ports, and service dependencies will be automatically detected and configured from <code class="font-mono bg-blue-100 px-1 rounded text-blue-900">devpanel.yaml</code> in the repository root.</p>
 					</div>
 				{/if}
+			</div>
 
-				<!-- Environment Variables -->
-				<div class="pt-4 border-t border-gray-100">
-					<span class="block text-sm font-medium text-gray-900 mb-3">Environment Variables</span>
-					<EnvVarEditor bind:envVars={envVars} />
+			<div class="flex justify-end pt-4 border-t border-gray-100">
+				<button
+					type="button"
+					onclick={goToReview}
+					disabled={isDeploying}
+					class="px-6 py-2.5 bg-blue-600 text-white font-semibold text-sm rounded-lg hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50"
+				>
+					{isDeploying ? 'Preparing Deployment...' : 'Continue to Review'}
+				</button>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Step 4: Pre-deployment Review & Confirm -->
+	{#if step === 4 && preDeployData}
+		<div class="max-w-3xl mx-auto bg-white border border-gray-200 rounded-xl p-8 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+			<div>
+				<h2 class="text-2xl font-bold text-gray-900">Review &amp; Deploy</h2>
+				<p class="text-sm text-gray-500 mt-1">Confirm detected services and container settings before triggering build.</p>
+			</div>
+
+			{#if deployError}
+				<div class="p-4 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+					{deployError}
+				</div>
+			{/if}
+
+			<div class="space-y-4">
+				<div class="rounded-lg bg-gray-50 p-4 border border-gray-200">
+					<div class="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-2">Blueprint Summary</div>
+					<div class="text-sm font-bold text-gray-900">{preDeployData.blueprint.name}</div>
+					{#if preDeployData.blueprint.repo_url}
+						<div class="text-xs font-mono text-blue-600 mt-1">{preDeployData.blueprint.repo_url}</div>
+					{/if}
+				</div>
+
+				<div>
+					<div class="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-2">Services to be Created ({preDeployData.payloadServices.length})</div>
+					<div class="space-y-2">
+						{#each preDeployData.payloadServices as svc}
+							<div class="p-3 border border-gray-200 rounded-lg flex items-center justify-between font-mono text-xs bg-white">
+								<div>
+									<span class="font-bold text-gray-900">{svc.name}</span>
+									<span class="ml-2 rounded px-1.5 py-0.5 bg-gray-100 text-gray-700 uppercase font-semibold text-[10px]">{svc.type}</span>
+								</div>
+								<div class="text-gray-500">Port {svc.port}</div>
+							</div>
+						{/each}
+					</div>
 				</div>
 			</div>
 
-			<div class="mt-8 flex justify-end gap-4">
+			<div class="flex justify-end gap-3 pt-4 border-t border-gray-100">
 				<button
 					type="button"
-					onclick={() => (step = selectedType.needsRepo ? 2 : 1)}
-					class="px-5 py-2.5 text-gray-600 font-medium hover:bg-gray-100 rounded-lg transition-colors"
+					onclick={() => (step = 3)}
+					class="px-5 py-2.5 text-gray-700 font-semibold text-sm rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors"
 				>
-					Back
+					Back to Edit
 				</button>
 				<button
 					type="button"
-					onclick={prepareDeploy}
+					onclick={executeDeploy}
 					disabled={isDeploying}
-					class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium rounded-lg transition-colors shadow-sm flex items-center gap-2"
+					class="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white font-semibold text-sm rounded-lg hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50"
 				>
-					{#if isDeploying}
-						<div class="animate-spin rounded-full h-4 w-4 border-2 border-white/20 border-t-white"></div>
-						<span>Preparing...</span>
-					{:else}
-						<span>Review & Deploy</span>
-						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-					{/if}
+					<span class="material-symbols-outlined" style="font-size: 18px">rocket_launch</span>
+					{isDeploying ? 'Deploying...' : 'Confirm & Deploy'}
 				</button>
 			</div>
 		</div>
 	{/if}
 </div>
-
-<!-- Pre-Deployment Review Modal -->
-{#if preDeployData}
-	<div class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-		<div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-			<!-- Background overlay -->
-			<div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity backdrop-blur-sm" aria-hidden="true" onclick={() => (preDeployData = null)}></div>
-
-			<!-- This element is to trick the browser into centering the modal contents. -->
-			<span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-
-			<!-- Modal panel -->
-			<div class="inline-block align-bottom bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full border border-gray-100 relative z-10">
-				<div class="bg-white px-4 pt-5 pb-4 sm:p-8 sm:pb-6">
-					<div class="sm:flex sm:items-start">
-						<div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
-							<svg class="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-							</svg>
-						</div>
-						<div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-							<h3 class="text-xl leading-6 font-semibold text-gray-900" id="modal-title">
-								Review Deployment Details
-							</h3>
-							<div class="mt-2">
-								<p class="text-sm text-gray-500 mb-6">
-									The following services will be configured and deployed for <span class="font-semibold text-gray-800">{appName}</span>.
-								</p>
-
-								<div class="space-y-4 max-h-[50vh] overflow-y-auto pr-2">
-									{#each preDeployData.payloadServices as svc}
-										<div class="border border-gray-200 rounded-xl p-4 bg-gray-50 flex items-start justify-between">
-											<div>
-												<div class="flex items-center gap-2 mb-1">
-													<h4 class="font-bold text-gray-900 text-lg">{svc.name}</h4>
-													<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-200 text-gray-700 uppercase tracking-wider">{svc.type}</span>
-												</div>
-												<div class="text-sm text-gray-500 space-y-1">
-													{#if svc.image}
-														<p><span class="font-medium">Image:</span> {svc.image}</p>
-													{:else}
-														<p><span class="font-medium">Build Command:</span> <code class="bg-gray-100 px-1 rounded">{svc.build_command || 'Auto'}</code></p>
-													{/if}
-													<p><span class="font-medium">Start Command:</span> <code class="bg-gray-100 px-1 rounded">{svc.start_command || 'Auto'}</code></p>
-													<p><span class="font-medium">Port:</span> {svc.port || 'Auto'}</p>
-												</div>
-											</div>
-											<div class="bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm text-xs font-mono text-gray-600">
-												{Object.keys(svc.env_vars || {}).length} ENV Vars
-											</div>
-										</div>
-									{/each}
-								</div>
-
-							</div>
-						</div>
-					</div>
-				</div>
-				<div class="bg-gray-50 px-4 py-4 sm:px-8 sm:flex sm:flex-row-reverse rounded-b-2xl border-t border-gray-200">
-					<button
-						type="button"
-						class="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-6 py-2.5 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm transition-colors"
-						onclick={executeDeploy}
-						disabled={isDeploying}
-					>
-						{#if isDeploying}
-							<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-							Deploying...
-						{:else}
-							Confirm & Deploy
-						{/if}
-					</button>
-					<button
-						type="button"
-						class="mt-3 w-full inline-flex justify-center rounded-xl border border-gray-300 shadow-sm px-6 py-2.5 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm transition-colors"
-						onclick={() => (preDeployData = null)}
-						disabled={isDeploying}
-					>
-						Cancel
-					</button>
-				</div>
-			</div>
-		</div>
-	</div>
-{/if}
+</AppShell>

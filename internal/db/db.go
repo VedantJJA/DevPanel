@@ -83,6 +83,7 @@ func (d *DB) migrate() error {
 
 	// Dynamic schema updates
 	_, _ = d.conn.Exec(`ALTER TABLE services ADD COLUMN image TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.conn.Exec(`ALTER TABLE services ADD COLUMN runtime TEXT NOT NULL DEFAULT ''`)
 
 	log.Println("db: migrations complete")
 	return nil

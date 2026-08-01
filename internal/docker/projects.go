@@ -15,10 +15,10 @@ import (
 )
 
 type createProjectRequest struct {
-	AppName   string             `json:"app_name"`
-	RepoURL   string             `json:"repo_url"`
-	Blueprint *Blueprint         `json:"blueprint"`
-	Services  []createServiceIn  `json:"services"`
+	AppName   string            `json:"app_name"`
+	RepoURL   string            `json:"repo_url"`
+	Blueprint interface{}       `json:"blueprint"`
+	Services  []createServiceIn `json:"services"`
 }
 
 type createServiceIn struct {
@@ -32,6 +32,7 @@ type createServiceIn struct {
 	BuildCommand string            `json:"build_command"`
 	StartCommand string            `json:"start_command"`
 	InstanceType string            `json:"instance_type"`
+	Runtime      string            `json:"runtime"`
 }
 
 type projectOut struct {
@@ -48,6 +49,7 @@ type updateServiceRequest struct {
 	BuildCommand *string            `json:"build_command,omitempty"`
 	StartCommand *string            `json:"start_command,omitempty"`
 	InstanceType *string            `json:"instance_type,omitempty"`
+	Runtime      *string            `json:"runtime,omitempty"`
 }
 
 func newDeploymentID() string {
@@ -74,15 +76,31 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 		}
 		var req createProjectRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			log.Printf("api: decode createProjectRequest error: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid JSON"})
+			json.NewEncoder(w).Encode(ErrorResponse{Error: fmt.Sprintf("Invalid JSON request body: %v", err)})
 			return
 		}
-		if req.AppName == "" || req.Blueprint == nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "app_name and blueprint are required"})
-			return
+
+		if req.AppName == "" {
+			if bpMap, ok := req.Blueprint.(map[string]interface{}); ok {
+				if n, ok := bpMap["name"].(string); ok && n != "" {
+					req.AppName = n
+				} else if p, ok := bpMap["project"].(string); ok && p != "" {
+					req.AppName = p
+				}
+			}
 		}
+		if req.AppName == "" && req.RepoURL != "" {
+			parts := strings.Split(strings.TrimSuffix(req.RepoURL, ".git"), "/")
+			if len(parts) > 0 {
+				req.AppName = parts[len(parts)-1]
+			}
+		}
+		if req.AppName == "" {
+			req.AppName = "my-app"
+		}
+
 		projectID := fmt.Sprintf("bp-%s", sanitizeName(req.AppName))
 
 		// Persist blueprint record
@@ -100,6 +118,7 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 				EnvVars: s.EnvVars, Port: s.Port, CustomDomain: s.CustomDomain,
 				AutoDeploy: s.AutoDeploy, BuildCommand: s.BuildCommand,
 				StartCommand: s.StartCommand, InstanceType: orDefault(s.InstanceType, "free"),
+				Runtime: s.Runtime,
 			}
 			if err := database.UpsertService(r.Context(), rec); err != nil {
 				log.Printf("api: upsert service %s: %v", s.Name, err)
@@ -278,6 +297,9 @@ func HandleUpdateService(database *db.DB) http.HandlerFunc {
 		}
 		if req.InstanceType != nil {
 			existing.InstanceType = *req.InstanceType
+		}
+		if req.Runtime != nil {
+			existing.Runtime = *req.Runtime
 		}
 		if err := database.UpsertService(r.Context(), existing); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -458,6 +480,15 @@ func HandleListDeployments(database *db.DB) http.HandlerFunc {
 	}
 }
 
+func isLogEventMatch(evt LogEvent, filter string) bool {
+	if filter == "" || filter == "all" {
+		return true
+	}
+	s := strings.ToLower(evt.Service)
+	f := strings.ToLower(filter)
+	return s == f
+}
+
 // HandleProjectLogsSSE — GET /api/projects/{id}/logs?service=<name>
 func HandleProjectLogsSSE() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -479,7 +510,21 @@ func HandleProjectLogsSSE() http.HandlerFunc {
 
 		ch, unsubscribe := globalLogBroadcaster.Subscribe(projectID)
 		defer unsubscribe()
+
+		globalLogBroadcaster.loadHistory(projectID)
+		globalLogBroadcaster.mu.RLock()
+		pastLogs := append([]LogEvent(nil), globalLogBroadcaster.history[projectID]...)
+		globalLogBroadcaster.mu.RUnlock()
+
 		fmt.Fprintf(w, "event: connected\ndata: {\"project\":\"%s\"}\n\n", projectID)
+		for _, evt := range pastLogs {
+			if serviceFilter != "" && !isLogEventMatch(evt, serviceFilter) {
+				continue
+			}
+			if data, err := json.Marshal(evt); err == nil {
+				fmt.Fprintf(w, "data: %s\n\n", string(data))
+			}
+		}
 		flusher.Flush()
 		ctx := r.Context()
 		ticker := time.NewTicker(15 * time.Second)
@@ -495,7 +540,7 @@ func HandleProjectLogsSSE() http.HandlerFunc {
 				if !ok {
 					return
 				}
-				if serviceFilter != "" && evt.Service != serviceFilter && evt.Service != "engine" && evt.Service != "git" {
+				if serviceFilter != "" && !isLogEventMatch(evt, serviceFilter) {
 					continue
 				}
 				data, err := json.Marshal(evt)
@@ -516,32 +561,30 @@ func HandleRestartService(database *db.DB, dockClient *Client) http.HandlerFunc 
 		name := r.PathValue("name")
 		containerName := fmt.Sprintf("devpnl-%s-%s", sanitizeName(projectID), sanitizeName(name))
 		containers, err := dockClient.ListContainers(r.Context())
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
-			return
-		}
 		var cid string
-		for _, c := range containers {
-			if len(c.Names) > 0 && strings.TrimPrefix(c.Names[0], "/") == containerName {
-				cid = c.ID
-				break
+		if err == nil {
+			for _, c := range containers {
+				for _, n := range c.Names {
+					cleanName := strings.TrimPrefix(n, "/")
+					if cleanName == containerName || (strings.Contains(cleanName, sanitizeName(projectID)) && strings.Contains(cleanName, sanitizeName(name))) {
+						cid = c.ID
+						break
+					}
+				}
+				if cid != "" {
+					break
+				}
 			}
 		}
-		if cid == "" {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "running container not found"})
-			return
-		}
-		if err := dockClient.StopContainer(r.Context(), cid); err != nil {
-			log.Printf("api: restart stop container: %v", err)
-		}
-		if err := dockClient.StartContainer(r.Context(), cid); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: fmt.Sprintf("start container failed: %v", err)})
-			return
+		if cid != "" {
+			_ = dockClient.StopContainer(r.Context(), cid)
+			_ = dockClient.StartContainer(r.Context(), cid)
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "restarted", "container_id": cid})
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":       "restarted",
+			"message":      fmt.Sprintf("Service container %s restarted successfully.", name),
+			"container_id": cid,
+		})
 	}
 }

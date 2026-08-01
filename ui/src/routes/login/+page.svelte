@@ -8,21 +8,15 @@
 
 	async function handleLogin(e: Event) {
 		e.preventDefault();
-		if (!password) {
-			errorMsg = 'Password is required.';
-			return;
-		}
-
+		if (!password) { errorMsg = 'Password is required.'; return; }
 		isSubmitting = true;
 		errorMsg = '';
-
 		try {
 			const res = await fetch('/api/auth/login', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ password })
 			});
-
 			if (res.ok) {
 				authState.update(s => ({ ...s, isAuthenticated: true }));
 				goto('/');
@@ -30,7 +24,7 @@
 				const data = await res.json();
 				errorMsg = data.error || 'Invalid password.';
 			}
-		} catch (err) {
+		} catch {
 			errorMsg = 'Network error occurred.';
 		} finally {
 			isSubmitting = false;
@@ -38,53 +32,68 @@
 	}
 </script>
 
-<div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative overflow-hidden">
-	<!-- Background graphic -->
-	<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-blue-100/50 rounded-full blur-[100px] pointer-events-none"></div>
+<svelte:head><title>Sign in — DevPanel</title></svelte:head>
 
-	<div class="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
-		<div class="flex justify-center mb-6">
-			<div class="w-16 h-16 bg-white rounded-2xl flex items-center justify-center border border-gray-200 shadow-xl relative group">
-				<div class="absolute inset-0 bg-blue-500/10 rounded-2xl blur-md opacity-0 group-hover:opacity-100 transition-opacity"></div>
-				<svg class="w-8 h-8 text-blue-600 relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path></svg>
+<div class="min-h-screen flex flex-col items-center justify-center relative overflow-hidden p-4" style="background-color: var(--background)">
+	<!-- Background glow -->
+	<div class="pointer-events-none absolute left-1/2 top-1/3 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-30" style="background: radial-gradient(circle, color-mix(in oklch, var(--primary), transparent 60%), transparent 70%)"></div>
+
+	<!-- Card -->
+	<div class="relative z-10 w-full max-w-sm">
+		<!-- Logo -->
+		<div class="mb-8 flex flex-col items-center text-center">
+			<div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl shadow-lg" style="background-color: var(--primary)">
+				<span class="material-symbols-outlined text-white" style="font-size: 32px">dns</span>
 			</div>
+			<h1 class="text-3xl font-bold tracking-tight" style="color: var(--on-surface)">DevPanel</h1>
+			<p class="mt-2 text-sm" style="color: var(--on-surface-variant)">Enter your master password to access the dashboard</p>
 		</div>
-		<h2 class="text-center text-3xl font-extrabold text-gray-900 tracking-tight">
-			Sign in to DevPanel
-		</h2>
-		<p class="mt-2 text-center text-sm text-gray-500">
-			Enter your master password to access the dashboard
-		</p>
-	</div>
 
-	<div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md relative z-10">
-		<div class="bg-white py-8 px-4 shadow-xl sm:rounded-2xl sm:px-10 border border-gray-200">
-			<form class="space-y-6" onsubmit={handleLogin}>
+		<!-- Form Card -->
+		<div class="card-surface p-8">
+			<form onsubmit={handleLogin} class="space-y-5">
 				<div>
-					<label for="password" class="block text-sm font-medium text-gray-700">
-						Password
-					</label>
-					<div class="mt-2">
-						<input id="password" name="password" type="password" required bind:value={password}
-							class="appearance-none block w-full px-4 py-3 border border-gray-300 rounded-xl shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white text-gray-900 transition-colors"
-							placeholder="••••••••">
-					</div>
+					<label for="password" class="mb-1.5 block text-sm font-medium" style="color: var(--on-surface)">Password</label>
+					<input
+						id="password"
+						name="password"
+						type="password"
+						required
+						bind:value={password}
+						placeholder="••••••••"
+						class="w-full rounded-lg border px-4 py-3 text-sm outline-none transition-all"
+						style="border-color: var(--outline-variant); background-color: var(--surface-lowest); color: var(--on-surface);"
+						onfocus={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 0 0 3px color-mix(in oklch, var(--primary), transparent 80%)'; }}
+						onblur={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--outline-variant)'; (e.currentTarget as HTMLElement).style.boxShadow = ''; }}
+					/>
 				</div>
 
 				{#if errorMsg}
-					<div class="text-red-700 text-sm bg-red-50 p-3 rounded-lg border border-red-200 flex items-center gap-2">
-						<svg class="w-4 h-4 shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+					<div class="flex items-center gap-2 rounded-lg border px-4 py-3 text-sm" style="background-color: var(--error-container); border-color: var(--error); color: var(--error)">
+						<span class="material-symbols-outlined" style="font-size: 18px">error</span>
 						{errorMsg}
 					</div>
 				{/if}
 
-				<div>
-					<button type="submit" disabled={isSubmitting}
-						class="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-sm text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5 active:translate-y-0">
-						{isSubmitting ? 'Authenticating...' : 'Sign In'}
-					</button>
-				</div>
+				<button
+					type="submit"
+					disabled={isSubmitting}
+					class="flex w-full items-center justify-center gap-2 rounded-lg py-3 text-sm font-semibold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+					style="background-color: var(--primary); color: var(--on-primary);"
+				>
+					{#if isSubmitting}
+						<span class="material-symbols-outlined animate-spin" style="font-size: 18px">refresh</span>
+						Authenticating…
+					{:else}
+						<span class="material-symbols-outlined" style="font-size: 18px">login</span>
+						Sign In
+					{/if}
+				</button>
 			</form>
 		</div>
+
+		<p class="mt-6 text-center text-xs" style="color: var(--on-surface-variant)">
+			Self-hosted PaaS · Secure access required
+		</p>
 	</div>
 </div>

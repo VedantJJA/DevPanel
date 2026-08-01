@@ -1,41 +1,9 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import type { Container, Volume, SystemStats, BlueprintItem, DeleteTarget, ErrorModalState, LogStreamState, ProjectDetail } from '$lib/types';
-	
-	import Sidebar from '$lib/components/Sidebar.svelte';
-	import DashboardView from '$lib/components/views/DashboardView.svelte';
-	import ContainersView from '$lib/components/views/ContainersView.svelte';
-	import BlueprintsView from '$lib/components/views/BlueprintsView.svelte';
-	import SettingsView from '$lib/components/views/SettingsView.svelte';
-	import ConfirmDeleteModal from '$lib/components/modals/ConfirmDeleteModal.svelte';
-	import ErrorAlertModal from '$lib/components/modals/ErrorAlertModal.svelte';
-	import LogStreamModal from '$lib/components/modals/LogStreamModal.svelte';
-	import DeploymentLogsModal from '$lib/components/modals/DeploymentLogsModal.svelte';
-	import Terminal from '$lib/components/Terminal.svelte';
-	import EnvVarEditor from '$lib/components/EnvVarEditor.svelte';
-	import DropdownMenu from '$lib/components/DropdownMenu.svelte';
-	import { getProject, updateService, triggerDeploy, restartService } from '$lib/api';
-
-	// Navigation & View State
-	let appView = $state('dashboard'); // 'dashboard', 'containers', 'blueprints', 'workspaces', 'settings', 'detail'
-	let selectedProject = $state<ProjectDetail | null>(null);
-	let selectedServiceIdx = $state(0);
-	let serviceTab = $state('events'); // 'events', 'logs', 'env', 'domains', 'metrics', 'settings'
-	let mobileMenuOpen = $state(false);
-
-	let loading = $state(true);
-	let actionLoading = $state<string | null>(null);
-	let showDeployLogsFor = $state<string | null>(null);
-	let errorMessage = $state<string | null>(null);
-	let pingMs = $state<number | null>(null);
-	let autoRefreshRateSec = $state(5);
-	let githubUsername = $state('');
-	let githubToken = $state('');
-	let showEnvValues = $state(false);
+	import AppShell from '$lib/components/AppShell.svelte';
+	import type { Container, SystemStats, BlueprintItem } from '$lib/types';
 
 	let containers = $state<Container[]>([]);
-	let volumes = $state<Volume[]>([]);
-	let theme = $state<'light' | 'dark'>('light');
 	let blueprints = $state<BlueprintItem[]>([]);
 	let systemStats = $state<SystemStats>({
 		totalContainers: 0,
@@ -46,51 +14,70 @@
 		memPercent: 0,
 		cpus: 1
 	});
-
-	// Modals State
-	let selectedContainerLogs = $state<LogStreamState | null>(null);
-	let deleteTarget = $state<DeleteTarget | null>(null);
-	let forceDelete = $state(false);
-	let errorModal = $state<ErrorModalState | null>(null);
-
-	let logSocket: WebSocket | null = null;
+	let loading = $state(true);
+	let pingMs = $state<number | null>(null);
+	let autoRefreshSec = $state(5);
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 	let pingInterval: ReturnType<typeof setInterval> | null = null;
+
+	let events = $state<{ time: string; kind: 'success' | 'error' | 'warning' | 'info'; text: string }[]>([]);
+
+	const eventColors = {
+		success: 'var(--success)',
+		error: 'var(--error)',
+		warning: 'var(--warning)',
+		info: 'var(--primary)'
+	};
+
+	const statusStyles: Record<string, { label: string; bg: string; color: string }> = {
+		running: { label: 'Running', bg: 'var(--success-container)', color: 'var(--on-success-container)' },
+		stopped: { label: 'Stopped', bg: 'var(--surface-high)', color: 'var(--on-surface-variant)' },
+		restarting: { label: 'Restarting', bg: 'var(--warning-container)', color: 'var(--warning)' },
+		error: { label: 'Error', bg: 'var(--error-container)', color: 'var(--error)' }
+	};
 
 	async function measurePing() {
 		const start = performance.now();
 		try {
 			const res = await fetch('/healthz', { cache: 'no-store' });
-			if (res.ok) {
-				pingMs = Math.round(performance.now() - start);
-			}
-		} catch (e) {
+			if (res.ok) pingMs = Math.round(performance.now() - start);
+		} catch {
 			pingMs = null;
 		}
 	}
 
+	function formatTimeAgo(isoString: string): string {
+		if (!isoString) return 'Just now';
+		const date = new Date(isoString);
+		const now = new Date();
+		const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+		if (seconds < 10) return 'Just now';
+		if (seconds < 60) return `${seconds}s ago`;
+		const minutes = Math.floor(seconds / 60);
+		if (minutes < 60) return `${minutes} min${minutes > 1 ? 's' : ''} ago`;
+		const hours = Math.floor(minutes / 60);
+		if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+		const days = Math.floor(hours / 24);
+		return `${days} day${days > 1 ? 's' : ''} ago`;
+	}
+
 	async function fetchData() {
-		loading = true;
-		errorMessage = null;
 		try {
-			const [containersRes, statsRes, volumesRes, blueprintsRes] = await Promise.all([
+			const [containersRes, statsRes, blueprintsRes] = await Promise.all([
 				fetch('/api/containers'),
 				fetch('/api/system/stats'),
-				fetch('/api/volumes'),
 				fetch('/api/blueprints')
 			]);
-
 			if (containersRes.ok) {
 				const data = await containersRes.json();
 				containers = data.containers || [];
 			}
-
 			if (statsRes.ok) {
 				const stats = await statsRes.json();
 				systemStats = {
 					totalContainers: stats.totalContainers ?? containers.length,
-					activeContainers: stats.activeContainers ?? containers.filter(c => c.status === 'running').length,
-					stoppedContainers: stats.stoppedContainers ?? containers.filter(c => c.status !== 'running').length,
+					activeContainers: stats.activeContainers ?? containers.filter((c) => c.status === 'running').length,
+					stoppedContainers: stats.stoppedContainers ?? containers.filter((c) => c.status !== 'running').length,
 					totalMemMb: stats.totalMemMb || 0,
 					usedMemMb: stats.usedMemMb || 0,
 					memPercent: stats.memPercent || 0,
@@ -100,534 +87,214 @@
 					arch: stats.arch
 				};
 			}
-
-			if (volumesRes.ok) {
-				const vData = await volumesRes.json();
-				volumes = vData.volumes || [];
-			}
-
 			if (blueprintsRes.ok) {
 				const bpData = await blueprintsRes.json();
 				blueprints = bpData.blueprints || [];
+
+				const newEvents: { time: string; kind: 'success' | 'error' | 'warning' | 'info'; text: string }[] = [];
+				for (const bp of blueprints) {
+					const timeStr = formatTimeAgo(bp.created_at || bp.updated_at || '');
+					if (bp.status === 'active' || bp.status === 'live' || bp.status === 'ready') {
+						newEvents.push({ time: timeStr, kind: 'success', text: `Deploy complete — ${bp.name}` });
+					} else if (bp.status === 'error') {
+						newEvents.push({ time: timeStr, kind: 'error', text: `Build error — ${bp.name}` });
+					} else if (bp.status === 'building' || bp.status === 'deploying') {
+						newEvents.push({ time: timeStr, kind: 'info', text: `Redeploy in progress — ${bp.name}` });
+					}
+				}
+				if (newEvents.length === 0) {
+					newEvents.push({ time: 'Just now', kind: 'info', text: 'System initialized. Ready for project deployments.' });
+				}
+				events = newEvents;
 			}
-		} catch (err: any) {
-			console.error('Error fetching live telemetry:', err.message);
-			errorMessage = `Unable to connect to Docker runtime API: ${err.message}`;
+		} catch (err) {
+			console.error('fetchData error:', err);
 		} finally {
 			loading = false;
 		}
 	}
 
-	async function handleSelectService(container: Container) {
-		const projName = container.name.replace(/^devpnl-/, '').replace(/-[^-]+$/, '');
-		try {
-			const data = await getProject(projName);
-			selectedProject = data;
-			selectedServiceIdx = 0;
-			serviceTab = 'events';
-			appView = 'detail';
-		} catch (e) {
-			openLogStream(container);
-		}
-	}
-
-	function handleBackToDashboard() {
-		selectedProject = null;
-		appView = 'dashboard';
-		mobileMenuOpen = false;
-	}
-
-	function navigateTo(view: string) {
-		appView = view;
-		selectedProject = null;
-		mobileMenuOpen = false;
-	}
-
-	async function toggleContainerStatus(container: Container) {
-		actionLoading = container.id;
-		const action = container.status === 'running' ? 'stop' : 'start';
-		try {
-			const res = await fetch(`/api/containers/${action}?id=${container.id}`, { method: 'POST' });
-			if (!res.ok) throw new Error(await res.text());
-			await fetchData();
-		} catch (e: any) {
-			openErrorPopup(`Container ${action} Failed`, `Unable to ${action} container '${container.name}'.`, e.message);
-		} finally {
-			actionLoading = null;
-		}
-	}
-
-	function promptDeleteContainer(container: Container) {
-		deleteTarget = { type: 'container', idOrName: container.id, label: container.name };
-		forceDelete = false;
-	}
-
-	function promptDeleteBlueprint(bp: BlueprintItem) {
-		deleteTarget = { type: 'blueprint', idOrName: bp.id, label: bp.name };
-		forceDelete = false;
-	}
-
-	async function handleDeployBlueprint(bp: BlueprintItem) {
-		actionLoading = bp.id;
-		try {
-			const res = await fetch('/api/blueprints/deploy', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ repo_url: bp.repo_url, app_name: bp.name })
-			});
-			const data = await res.json();
-			if (!res.ok || data.error) {
-				openErrorPopup('Deployment Error', data.error || 'Failed to deploy application blueprint.', data.details);
-			} else {
-				await fetchData();
-			}
-		} catch (err: any) {
-			openErrorPopup('Network Request Error', `Failed to send deployment command: ${err.message}`);
-		} finally {
-			actionLoading = null;
-		}
-	}
-
-	async function confirmDelete() {
-		if (!deleteTarget) return;
-		const target = deleteTarget;
-		deleteTarget = null;
-		actionLoading = target.idOrName;
-		try {
-			if (target.type === 'container') {
-				const res = await fetch(`/api/containers/delete?id=${target.idOrName}&force=${forceDelete}`, { method: 'DELETE' });
-				const data = await res.json();
-				if (!res.ok || data.error) {
-					openErrorPopup('Container Deletion Error', data.error || 'Failed to remove container.', data.details);
-				} else {
-					await fetchData();
-				}
-			} else if (target.type === 'blueprint') {
-				const res = await fetch(`/api/blueprints/delete?id=${encodeURIComponent(target.idOrName)}`, { method: 'DELETE' });
-				const data = await res.json();
-				if (!res.ok || data.error) {
-					openErrorPopup('Blueprint Deletion Error', data.error || 'Failed to remove blueprint.');
-				} else {
-					await fetchData();
-				}
-			}
-		} catch (err: any) {
-			openErrorPopup('Network Request Error', `Failed to execute delete command: ${err.message}`);
-		} finally {
-			actionLoading = null;
-		}
-	}
-
-	function openErrorPopup(title: string, message: string, details?: string) {
-		errorModal = { title, message, details };
-	}
-
-	function openLogStream(container: Container) {
-		closeLogStream();
-		selectedContainerLogs = { id: container.id, name: container.name, logs: [`[SYS] Connecting WebSocket log stream for ${container.name}...`] };
-		const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-		const wsUrl = `${protocol}//${window.location.host}/ws/logs?id=${container.id}&tail=100`;
-
-		try {
-			logSocket = new WebSocket(wsUrl);
-			logSocket.onopen = () => selectedContainerLogs?.logs.push(`[SYS] WebSocket connected`);
-			logSocket.onmessage = (e) => {
-				try {
-					const msg = JSON.parse(e.data);
-					if (msg.type === 'log' && Array.isArray(msg.data)) {
-						const newLines = msg.data.map((l: any) => `${l.timestamp ? `[${l.timestamp}] ` : ''}${l.line}`);
-						if (selectedContainerLogs) selectedContainerLogs.logs = [...selectedContainerLogs.logs, ...newLines];
-					}
-				} catch (err) {
-					if (selectedContainerLogs) selectedContainerLogs.logs.push(e.data);
-				}
-			};
-			logSocket.onclose = () => selectedContainerLogs?.logs.push(`[SYS] Log stream closed`);
-		} catch (err: any) {
-			selectedContainerLogs?.logs.push(`[ERR] WebSocket error: ${err.message}`);
-		}
-	}
-
-	function closeLogStream() {
-		if (logSocket) {
-			logSocket.close();
-			logSocket = null;
-		}
-		selectedContainerLogs = null;
-	}
-
-	function updateRefreshRate(rate: number) {
-		autoRefreshRateSec = rate;
-		if (pollInterval) clearInterval(pollInterval);
-		pollInterval = setInterval(fetchData, autoRefreshRateSec * 1000);
-	}
-
-	async function handlePruneSystem() {
-		actionLoading = 'prune';
-		try {
-			const res = await fetch('/api/system/prune', { method: 'POST' });
-			if (!res.ok) throw new Error(await res.text());
-			await fetchData();
-		} catch (e: any) {
-			openErrorPopup('Prune Error', `System prune failed: ${e.message}`);
-		} finally {
-			actionLoading = null;
-		}
-	}
-
-	function setTheme(nextTheme: 'light' | 'dark') {
-		theme = nextTheme;
-		if (typeof document !== 'undefined') {
-			document.documentElement.classList.toggle('dark', nextTheme === 'dark');
-			localStorage.setItem('devpnl_theme', nextTheme);
-		}
-	}
-
 	onMount(async () => {
-		const savedTheme = localStorage.getItem('devpnl_theme');
-		setTheme(savedTheme === 'dark' ? 'dark' : 'light');
-
-		try {
-			const res = await fetch('/api/settings');
-			if (res.ok) {
-				const settings = await res.json();
-				if (settings.github_username) githubUsername = settings.github_username;
-				if (settings.github_token) githubToken = settings.github_token;
-			}
-		} catch (e) {
-			console.error('Failed to fetch settings:', e);
-		}
-		
-		if (typeof window !== 'undefined' && !githubUsername) {
-			githubUsername = localStorage.getItem('devpnl_gh_username') || '';
-		}
-		fetchData();
-		measurePing();
-		pollInterval = setInterval(fetchData, autoRefreshRateSec * 1000);
+		await fetchData();
+		await measurePing();
+		pollInterval = setInterval(fetchData, autoRefreshSec * 1000);
 		pingInterval = setInterval(measurePing, 3000);
 	});
 
 	onDestroy(() => {
 		if (pollInterval) clearInterval(pollInterval);
 		if (pingInterval) clearInterval(pingInterval);
-		closeLogStream();
 	});
+
+	const running = $derived(containers.filter((c) => c.status === 'running').length);
+	const cpuPct = $derived(systemStats.cpuPercent ?? 0);
+	const memPct = $derived(systemStats.memPercent ?? 0);
 </script>
 
-<div class="min-h-screen bg-gray-50 text-gray-900 font-sans flex h-screen overflow-hidden selection:bg-blue-200 selection:text-blue-900">
-	<!-- Desktop Sidebar -->
-	<Sidebar
-		{appView}
-		{selectedProject}
-		{selectedServiceIdx}
-		{systemStats}
-		{pingMs}
-		onNavigate={navigateTo}
-		onSelectServiceTab={(tab) => (serviceTab = tab)}
-		activeServiceTab={serviceTab}
-		onBackToDashboard={handleBackToDashboard}
-	/>
-
-	<!-- Main Content Area -->
-	<main class="flex-1 flex flex-col min-w-0 bg-gray-50 overflow-hidden relative">
-		<!-- Mobile Header Bar -->
-		<div class="md:hidden h-16 border-b border-gray-200 bg-white flex items-center justify-between px-4 shrink-0 z-10">
-			<div class="flex items-center gap-3">
-				<button type="button" aria-label="Toggle mobile menu" class="text-gray-600 p-1 hover:bg-gray-100 rounded-lg" onclick={() => (mobileMenuOpen = !mobileMenuOpen)}>
-					<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+<AppShell {systemStats} {pingMs}>
+	<!-- Page Header -->
+	<div class="mb-6">
+		<div class="flex flex-wrap items-end justify-between gap-4">
+			<div>
+				<h1 class="text-[28px] font-bold leading-tight lg:text-[32px]" style="color: var(--on-surface)">Dashboard</h1>
+				<p class="mt-1" style="color: var(--on-surface-variant)">DevPanel · everything on this machine, in one place.</p>
+			</div>
+			<div class="flex flex-wrap gap-2">
+				<button
+					onclick={() => fetchData()}
+					class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors hover:opacity-80"
+					style="border-color: var(--outline-variant); background-color: var(--surface-lowest);"
+				>
+					<span class="material-symbols-outlined" style="font-size: 20px">refresh</span>
+					Refresh
 				</button>
-				<div class="flex items-center gap-2 text-gray-900 font-bold text-lg tracking-tight">
-					<div class="w-7 h-7 bg-blue-600 rounded-md flex items-center justify-center shadow-sm text-white">
-						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-					</div>
-					<span>DevPanel</span>
-				</div>
+				<a
+					href="/new"
+					class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-opacity hover:opacity-90"
+					style="background-color: var(--primary); color: var(--on-primary);"
+				>
+					<span class="material-symbols-outlined" style="font-size: 20px">add</span>
+					New Service
+				</a>
 			</div>
 		</div>
+	</div>
 
-		<!-- Dynamic View Area -->
-		<div class="flex-1 overflow-y-auto">
-			{#if !selectedProject && appView === 'dashboard'}
-				<DashboardView
-					{containers}
-					{systemStats}
-					onSelectService={handleSelectService}
-					onNewService={() => window.location.assign('/new')}
-					onToggleStatus={toggleContainerStatus}
-					onOpenLogs={openLogStream}
-					onPromptDelete={promptDeleteContainer}
-				/>
-			{:else if !selectedProject && appView === 'containers'}
-				<ContainersView
-					{containers}
-					{loading}
-					{actionLoading}
-					onToggleStatus={toggleContainerStatus}
-					onOpenLogs={openLogStream}
-					onPromptDelete={promptDeleteContainer}
-				/>
-			{:else if !selectedProject && appView === 'blueprints'}
-				<BlueprintsView
-					{blueprints}
-					{loading}
-					{actionLoading}
-					onDeployBlueprint={handleDeployBlueprint}
-					onPromptDeleteBlueprint={promptDeleteBlueprint}
-					onCreateBlueprint={() => window.location.assign('/new')}
-				/>
-			{:else if !selectedProject && appView === 'workspaces'}
-				<div class="p-10 flex flex-col items-center justify-center h-full text-center">
-					<svg class="w-12 h-12 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-					<h2 class="text-xl font-semibold text-gray-900">Workspaces</h2>
-					<p class="text-gray-500 mt-2">Manage your workspaces, team access, and billing here.</p>
+	<!-- Stat Cards -->
+	<div class="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+		<!-- Projects -->
+		<div class="card-surface flex flex-col gap-1 p-5">
+			<span class="label-caps" style="color: var(--on-surface-variant)">Projects</span>
+			<span class="text-2xl font-bold" style="color: var(--primary)">{blueprints.length}</span>
+			<span class="text-xs" style="color: var(--on-surface-variant)">{blueprints.filter(b => b.status === 'active').length} active</span>
+		</div>
+		<!-- Services running -->
+		<div class="card-surface flex flex-col gap-1 p-5">
+			<span class="label-caps" style="color: var(--on-surface-variant)">Containers running</span>
+			<span class="text-2xl font-bold" style="color: var(--success)">{running}/{containers.length}</span>
+			<span class="text-xs" style="color: var(--on-surface-variant)">{containers.filter(c => c.status === 'restarting').length} restarting</span>
+		</div>
+		<!-- CPU Load -->
+		<div class="card-surface flex flex-col gap-1 p-5">
+			<span class="label-caps" style="color: var(--on-surface-variant)">VM CPU</span>
+			<span class="text-2xl font-bold" style="color: var(--on-surface)">{cpuPct.toFixed(1)}%</span>
+			<div class="mt-2 h-1.5 w-full rounded-full" style="background-color: var(--surface-high)">
+				<div class="h-1.5 rounded-full transition-all" style="width: {cpuPct}%; background-color: var(--primary)"></div>
+			</div>
+		</div>
+		<!-- Memory -->
+		<div class="card-surface flex flex-col gap-1 p-5">
+			<span class="label-caps" style="color: var(--on-surface-variant)">VM Memory</span>
+			<span class="text-2xl font-bold" style="color: {memPct > 80 ? 'var(--error)' : 'var(--on-surface)'}">{memPct.toFixed(1)}%</span>
+			<div class="mt-2 h-1.5 w-full rounded-full" style="background-color: var(--surface-high)">
+				<div class="h-1.5 rounded-full transition-all" style="width: {memPct}%; background-color: {memPct > 80 ? 'var(--error)' : 'var(--primary)'}"></div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Main Grid -->
+	<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+		<!-- Active Containers (2/3 width) -->
+		<section class="card-surface overflow-hidden lg:col-span-2">
+			<div class="flex items-center justify-between border-b px-5 py-4" style="border-color: var(--outline-variant)">
+				<h2 class="font-bold">Active containers</h2>
+				<a href="/containers" class="text-sm font-medium hover:underline" style="color: var(--primary)">All containers</a>
+			</div>
+			{#if loading}
+				<div class="flex items-center justify-center py-12">
+					<span class="material-symbols-outlined animate-spin" style="color: var(--primary)">refresh</span>
 				</div>
-			{:else if !selectedProject && appView === 'settings'}
-				<SettingsView
-					{autoRefreshRateSec}
-					{githubUsername}
-					{githubToken}
-					{actionLoading}
-					{theme}
-					onSetTheme={setTheme}
-					onSetAutoRefresh={updateRefreshRate}
-					onSetGithubUsername={(username: string) => {
-						githubUsername = username;
-						if (typeof window !== 'undefined') {
-							localStorage.setItem('devpnl_gh_username', username);
-						}
-						fetch('/api/settings', {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ github_username: username })
-						});
-					}}
-					onSetGithubToken={(token: string) => {
-						githubToken = token;
-						fetch('/api/settings', {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ github_token: token })
-						});
-					}}
-					onPruneSystem={handlePruneSystem}
-				/>
-			{:else if selectedProject && selectedProject.services[selectedServiceIdx]}
-				{@const currentSvc = selectedProject!.services[selectedServiceIdx]}
-				{@const currentSvcContainer = containers.find(c => c.name === `devpnl-${selectedProject!.blueprint.name.toLowerCase()}-${currentSvc.name.toLowerCase()}`)}
-				{@const svcStatus = currentSvcContainer ? currentSvcContainer.status : 'stopped'}
-				
-				<div class="flex flex-col h-full bg-gray-50">
-					<!-- Detail Header -->
-					<header class="border-b border-gray-200 bg-white pt-6 pb-6 px-6 md:px-10 z-10 shadow-sm">
-						<div class="flex flex-col md:flex-row md:items-start justify-between gap-4">
-							<div class="flex items-start gap-4">
-								<div class="p-3 bg-blue-50 border border-blue-100 rounded-xl text-blue-600 shadow-sm relative">
-									<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
-									<!-- Status Indicator -->
-									<div class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full border-2 border-white {svcStatus === 'running' ? 'bg-emerald-500' : svcStatus === 'restarting' ? 'bg-yellow-500' : 'bg-red-500'}" title={`Status: ${svcStatus}`}></div>
+			{:else if containers.length === 0}
+				<div class="py-12 text-center text-sm" style="color: var(--on-surface-variant)">
+					No containers found. <a href="/new" class="font-medium hover:underline" style="color: var(--primary)">Deploy your first service →</a>
+				</div>
+			{:else}
+				<ul class="divide-y" style="border-color: var(--outline-variant)">
+					{#each containers.slice(0, 6) as container}
+						{@const s = statusStyles[container.status] ?? statusStyles.stopped}
+						<li>
+							<a
+								href="/containers"
+								class="flex items-center gap-4 px-5 py-4 transition-colors hover:opacity-90"
+								onmouseenter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--surface-low)'; }}
+								onmouseleave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = ''; }}
+							>
+								<span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style="background-color: var(--surface-low); color: var(--primary)">
+									<span class="material-symbols-outlined">deployed_code</span>
+								</span>
+								<div class="min-w-0 flex-1">
+									<p class="truncate font-semibold">{container.name}</p>
+									<p class="truncate text-xs" style="color: var(--on-surface-variant)">{container.image}</p>
 								</div>
-								<div>
-									<div class="flex items-center gap-2 mb-1">
-										<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-										<span class="text-sm font-medium text-gray-500">{selectedProject.blueprint.name}</span>
-									</div>
-									<h1 class="text-2xl font-bold text-gray-900 mb-2 flex items-center gap-3 tracking-tight">
-										<span>{currentSvc.name}</span>
-										<span class="px-2.5 py-0.5 rounded-full text-xs font-medium border bg-green-100 text-green-700 border-green-200 uppercase">
-											{currentSvc.type}
-										</span>
-										<span class="px-2.5 py-0.5 rounded-full text-xs font-medium border {svcStatus === 'running' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : svcStatus === 'restarting' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : 'bg-red-50 text-red-700 border-red-200'} capitalize">
-											{svcStatus}
-										</span>
-									</h1>
-									{#if currentSvc.type === 'static' || currentSvc.type === 'web'}
-										<a
-											href={`/app/${selectedProject.blueprint.name.toLowerCase()}`}
-											target="_blank"
-											rel="noreferrer"
-											class="text-blue-600 hover:text-blue-700 text-sm flex items-center gap-1.5 transition-colors font-medium"
-										>
-											<span>{typeof window !== 'undefined' ? window.location.origin : ''}/app/{selectedProject.blueprint.name.toLowerCase()}</span>
-											<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-										</a>
-									{/if}
-								</div>
-							</div>
+								<div class="hidden text-right text-xs sm:block" style="color: var(--on-surface-variant)">{container.uptime || '—'}</div>
+								<span class="inline-block rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider" style="background-color: {s.bg}; color: {s.color}">{s.label}</span>
+							</a>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</section>
 
-							<div class="flex items-center gap-3">
-								<button
-									type="button"
-									onclick={() => {
-										showDeployLogsFor = selectedProject!.blueprint.id || selectedProject!.blueprint.name;
-									}}
-									class="bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-blue-200 shadow-sm flex items-center gap-2"
-								>
-									<svg class="w-4 h-4 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-									View Deployment Logs
-								</button>
-								<button
-									type="button"
-									onclick={async () => {
-										const pid = selectedProject!.blueprint.id || selectedProject!.blueprint.name;
-										showDeployLogsFor = pid;
-										await triggerDeploy(pid);
-									}}
-									class="bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-gray-300 shadow-sm"
-								>
-									Manual Deploy
-								</button>
-								<button
-									type="button"
-									onclick={() => restartService(selectedProject!.blueprint.id || selectedProject!.blueprint.name, currentSvc.name)}
-									class="bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-gray-300 shadow-sm"
-								>
-									Restart Service
-								</button>
-							</div>
+		<!-- Right Column: Resources + Events -->
+		<div class="flex flex-col gap-6">
+			<!-- VM Resources -->
+			<section class="card-surface p-5">
+				<h2 class="mb-4 font-bold">VM Resources</h2>
+				{#each [
+					{ label: 'CPU', value: cpuPct, detail: `${cpuPct.toFixed(1)}% of ${systemStats.cpus} vCPU` },
+					{ label: 'Memory', value: memPct, detail: `${Math.round(systemStats.usedMemMb / 1024 * 10) / 10} of ${Math.round(systemStats.totalMemMb / 1024 * 10) / 10} GB` }
+				] as r}
+					<div class="mb-4 last:mb-0">
+						<div class="mb-1 flex justify-between text-xs">
+							<span class="font-medium">{r.label}</span>
+							<span style="color: var(--on-surface-variant)">{r.detail}</span>
 						</div>
-					</header>
-
-					<!-- Tab Content -->
-					<div class="flex-1 overflow-y-auto p-6 md:p-10">
-						<div class="max-w-5xl mx-auto w-full">
-							{#if serviceTab === 'events'}
-								<div class="space-y-6">
-									<h3 class="text-lg font-medium text-gray-900 mb-2">Service Configuration</h3>
-									
-									<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-										<div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-											<div class="flex items-center gap-2 mb-3 text-gray-700">
-												<svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
-												<h4 class="font-medium">Build Command</h4>
-											</div>
-											<div class="bg-gray-900 rounded-lg p-4 relative group">
-												<code class="text-emerald-400 font-mono text-sm break-all">
-													{currentSvc.build_command || 'None (Auto-detected)'}
-												</code>
-											</div>
-											<p class="text-xs text-gray-500 mt-3">Executed during the image build phase.</p>
-										</div>
-
-										<div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-											<div class="flex items-center gap-2 mb-3 text-gray-700">
-												<svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-												<h4 class="font-medium">Start Command</h4>
-											</div>
-											<div class="bg-gray-900 rounded-lg p-4 relative group">
-												<code class="text-blue-400 font-mono text-sm break-all">
-													{currentSvc.start_command || 'None (Container default)'}
-												</code>
-											</div>
-											<p class="text-xs text-gray-500 mt-3">Executed when the container starts.</p>
-										</div>
-									</div>
-								</div>
-							{:else if serviceTab === 'logs'}
-								<div class="h-[550px]">
-									<Terminal projectId={selectedProject.blueprint.id || selectedProject.blueprint.name} serviceFilter={currentSvc.name} title={`Live Terminal Stream: ${currentSvc.name}`} />
-								</div>
-							{:else if serviceTab === 'env'}
-								<div class="space-y-6">
-									<div class="flex justify-between items-center">
-										<div>
-											<h3 class="text-lg font-medium text-gray-900">Environment Variables</h3>
-											<p class="text-sm text-gray-500 mt-1">Manage configuration for your service.</p>
-										</div>
-										<button
-											type="button"
-											onclick={() => (showEnvValues = !showEnvValues)}
-											class="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-										>
-											{showEnvValues ? 'Hide Values' : 'Reveal Values'}
-										</button>
-									</div>
-									<div class="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-										<EnvVarEditor bind:envVars={currentSvc.env_vars} />
-										<div class="mt-4 flex justify-end">
-											<button
-												type="button"
-												onclick={() => updateService(selectedProject!.blueprint.id || selectedProject!.blueprint.name, currentSvc.name, currentSvc)}
-												class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-											>
-												Save Environment Variables
-											</button>
-										</div>
-									</div>
-								</div>
-							{:else if serviceTab === 'domains'}
-								<div class="space-y-6 max-w-4xl">
-									<div class="flex justify-between items-center">
-										<div>
-											<h3 class="text-lg font-medium text-gray-900">Custom Domains</h3>
-											<p class="text-sm text-gray-500 mt-1">Manage custom domains and SSL routing.</p>
-										</div>
-									</div>
-									<div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-										<div class="flex items-center justify-between">
-											<div>
-												<h4 class="font-medium text-gray-900">{typeof window !== 'undefined' ? window.location.origin : ''}/app/{selectedProject.blueprint.name.toLowerCase()}</h4>
-												<span class="inline-block mt-1 text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">Default Path URL</span>
-											</div>
-											<a href={`/app/${selectedProject.blueprint.name.toLowerCase()}`} target="_blank" rel="noreferrer" class="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-1">
-												Visit →
-											</a>
-										</div>
-									</div>
-								</div>
-							{:else if serviceTab === 'metrics'}
-								<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-									{#each ['CPU Usage', 'Memory Usage', 'Bandwidth', 'Requests'] as metric}
-										<div class="bg-white border border-gray-200 rounded-xl p-5 h-64 flex flex-col shadow-sm">
-											<h4 class="text-sm font-medium text-gray-700 mb-4">{metric}</h4>
-											<div class="flex-1 flex items-center justify-center text-gray-400 border-2 border-dashed border-gray-100 rounded-lg bg-gray-50">
-												<span class="text-sm font-medium">Telemetry Online</span>
-											</div>
-										</div>
-									{/each}
-								</div>
-							{:else if serviceTab === 'settings'}
-								<div class="space-y-8 max-w-3xl">
-									<div class="bg-white border border-gray-200 rounded-xl p-6 space-y-5 shadow-sm">
-										<div>
-											<label for="svcSettingName" class="block text-sm font-medium text-gray-700 mb-1.5">Service Name</label>
-											<input id="svcSettingName" type="text" bind:value={currentSvc.name} class="w-full bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
-										</div>
-										<div>
-											<label for="svcSettingBuild" class="block text-sm font-medium text-gray-700 mb-1.5">Build Command</label>
-											<input id="svcSettingBuild" type="text" bind:value={currentSvc.build_command} class="w-full font-mono bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
-										</div>
-										<div>
-											<label for="svcSettingStart" class="block text-sm font-medium text-gray-700 mb-1.5">Start Command</label>
-											<input id="svcSettingStart" type="text" bind:value={currentSvc.start_command} class="w-full font-mono bg-white border border-gray-300 rounded-lg px-4 py-2.5 text-gray-900 shadow-sm" />
-										</div>
-										<button
-											type="button"
-											onclick={() => updateService(selectedProject!.blueprint.id || selectedProject!.blueprint.name, currentSvc.name, currentSvc)}
-											class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-sm"
-										>
-											Save Settings
-										</button>
-									</div>
-								</div>
-							{/if}
+						<div class="h-1.5 w-full rounded-full" style="background-color: var(--surface-high)">
+							<div class="h-1.5 rounded-full" style="width: {r.value}%; background-color: var(--primary)"></div>
 						</div>
 					</div>
-				</div>
-			{/if}
-		</div>
-	</main>
+				{/each}
+			</section>
 
-	<!-- Modals -->
-	{#if deleteTarget}
-		<ConfirmDeleteModal {deleteTarget} {forceDelete} onForceChange={(v) => (forceDelete = v)} onConfirm={confirmDelete} onCancel={() => (deleteTarget = null)} />
-	{/if}
-	{#if errorModal}
-		<ErrorAlertModal {errorModal} onClose={() => (errorModal = null)} />
-	{/if}
-	{#if selectedContainerLogs}
-		<LogStreamModal {selectedContainerLogs} onClose={closeLogStream} />
-	{/if}
-	{#if showDeployLogsFor}
-		<DeploymentLogsModal projectId={showDeployLogsFor} onClose={() => (showDeployLogsFor = null)} />
-	{/if}
-</div>
+			<!-- Recent Events -->
+			<section class="card-surface p-5">
+				<h2 class="mb-3 font-bold">Recent Events</h2>
+				<ul class="space-y-3">
+					{#each events as e}
+						<li class="flex gap-3 text-sm">
+							<span class="label-caps shrink-0" style="color: var(--on-surface-variant)">{e.time}</span>
+							<span style="color: {eventColors[e.kind]}">{e.text}</span>
+						</li>
+					{/each}
+				</ul>
+			</section>
+		</div>
+	</div>
+
+	<!-- Projects Snapshot -->
+	<section class="card-surface mt-6 overflow-hidden">
+		<div class="flex items-center justify-between border-b px-5 py-4" style="border-color: var(--outline-variant)">
+			<h2 class="font-bold">Hosted projects</h2>
+			<a href="/blueprints" class="text-sm font-medium hover:underline" style="color: var(--primary)">All projects</a>
+		</div>
+		{#if blueprints.length === 0}
+			<div class="py-10 text-center text-sm" style="color: var(--on-surface-variant)">
+				No projects yet. <a href="/new" class="font-medium hover:underline" style="color: var(--primary)">Create your first project →</a>
+			</div>
+		{:else}
+			<div class="grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0" style="border-color: var(--outline-variant)">
+				{#each blueprints.slice(0, 3) as bp}
+					{@const s = statusStyles[bp.status ?? 'stopped'] ?? statusStyles.stopped}
+					<a href={`/projects/${bp.id}`} class="block p-5 transition-colors hover:bg-[color:var(--surface-low)]">
+						<div class="mb-2 flex items-center justify-between">
+							<span class="label-caps rounded px-2 py-1" style="background-color: var(--surface-low); color: var(--primary)">{bp.id?.slice(0, 8) || bp.name}</span>
+							<span class="inline-block rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider" style="background-color: {s.bg}; color: {s.color}">{bp.status || 'Unknown'}</span>
+						</div>
+						<p class="font-semibold">{bp.name}</p>
+						<p class="text-xs" style="color: var(--on-surface-variant)">{bp.serviceCount ?? bp.service_count_actual ?? 0} services</p>
+					</a>
+				{/each}
+			</div>
+		{/if}
+	</section>
+</AppShell>

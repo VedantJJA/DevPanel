@@ -23,6 +23,7 @@ type ServiceRecord struct {
 	BuildCommand string            `json:"build_command"`
 	StartCommand string            `json:"start_command"`
 	InstanceType string            `json:"instance_type"`
+	Runtime      string            `json:"runtime"`
 	CreatedAt    string            `json:"created_at"`
 	UpdatedAt    string            `json:"updated_at"`
 }
@@ -43,8 +44,8 @@ func (d *DB) UpsertService(ctx context.Context, s *ServiceRecord) error {
 	}
 	q := `
 	INSERT INTO services (project_id, name, type, image, env_json, port, custom_domain,
-	                      auto_deploy, build_command, start_command, instance_type)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	                      auto_deploy, build_command, start_command, instance_type, runtime)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(project_id, name) DO UPDATE SET
 	    type           = excluded.type,
 	    image          = excluded.image,
@@ -55,9 +56,10 @@ func (d *DB) UpsertService(ctx context.Context, s *ServiceRecord) error {
 	    build_command  = excluded.build_command,
 	    start_command  = excluded.start_command,
 	    instance_type  = excluded.instance_type,
+	    runtime        = excluded.runtime,
 	    updated_at     = strftime('%Y-%m-%dT%H:%M:%SZ','now');`
 	_, err = d.conn.ExecContext(ctx, q, s.ProjectID, s.Name, s.Type, s.Image, string(envJSON),
-		s.Port, s.CustomDomain, autoDeploy, s.BuildCommand, s.StartCommand, s.InstanceType)
+		s.Port, s.CustomDomain, autoDeploy, s.BuildCommand, s.StartCommand, s.InstanceType, s.Runtime)
 	if err != nil {
 		return fmt.Errorf("db: upsert service %s/%s: %w", s.ProjectID, s.Name, err)
 	}
@@ -69,7 +71,7 @@ func (d *DB) ListServices(ctx context.Context, projectID string) ([]ServiceRecor
 	ctx = contextOrBg(ctx)
 	q := `
 	SELECT id, name, type, image, env_json, port, custom_domain,
-	       auto_deploy, build_command, start_command, instance_type, created_at, updated_at
+	       auto_deploy, build_command, start_command, instance_type, runtime, created_at, updated_at
 	FROM services
 	WHERE project_id = ?
 	ORDER BY created_at ASC`
@@ -86,7 +88,7 @@ func (d *DB) ListServices(ctx context.Context, projectID string) ([]ServiceRecor
 		var ad int
 		s.ProjectID = projectID
 		if err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Image, &envJSON, &s.Port, &s.CustomDomain,
-			&ad, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			&ad, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.Runtime, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("db: scan service: %w", err)
 		}
 		_ = json.Unmarshal([]byte(envJSON), &s.EnvVars)
@@ -104,11 +106,11 @@ func (d *DB) GetService(ctx context.Context, projectID, name string) (*ServiceRe
 	var ad int
 	q := `
 	SELECT id, type, image, env_json, port, custom_domain,
-	       auto_deploy, build_command, start_command, instance_type, created_at, updated_at
+	       auto_deploy, build_command, start_command, instance_type, runtime, created_at, updated_at
 	FROM services WHERE project_id = ? AND name = ?`
 	err := d.conn.QueryRowContext(ctx, q, projectID, name).Scan(
 		&s.ID, &s.Type, &s.Image, &envJSON, &s.Port, &s.CustomDomain,
-		&ad, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.CreatedAt, &s.UpdatedAt)
+		&ad, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.Runtime, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

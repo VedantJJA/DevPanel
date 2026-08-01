@@ -329,35 +329,43 @@ func HandlePruneSystem(dockClient *Client) http.HandlerFunc {
 	}
 }
 
-// HandleListUserRepos fetches GitHub repositories for a given username.
-// If a github_token is stored in settings, it authenticates and returns private repos too.
-// Without a token, it falls back to the public API.
+// HandleListUserRepos fetches GitHub repositories for a given username or the authenticated token.
+// If a github_token is stored in settings, it authenticates against /user/repos to return all public & private repos.
 func HandleListUserRepos(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		username := strings.TrimSpace(r.URL.Query().Get("username"))
-		if username == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": "username query parameter is required"})
-			return
-		}
 
-		// Check for stored GitHub token
 		var ghToken string
+		var storedUser string
 		if database != nil {
 			if tok, err := database.GetSetting(r.Context(), "github_token"); err == nil && tok != "" {
-				ghToken = tok
+				ghToken = strings.TrimSpace(tok)
 			}
+			if u, err := database.GetSetting(r.Context(), "github_username"); err == nil && u != "" {
+				storedUser = strings.TrimSpace(u)
+			}
+		}
+
+		if username == "" {
+			username = storedUser
+		}
+		if username == "" {
+			username = "VedantJJA"
 		}
 
 		// Build the API request URL
 		var reqURL string
 		if ghToken != "" {
-			// Authenticated: use search for user's repos (includes private)
-			reqURL = fmt.Sprintf("https://api.github.com/users/%s/repos?sort=updated&per_page=50&type=all", username)
+			// Authenticated endpoint: returns all public & private repos for the authenticated PAT
+			reqURL = "https://api.github.com/user/repos?sort=updated&per_page=100&type=all"
+		} else if username != "" {
+			// Public fallback for specified username
+			reqURL = fmt.Sprintf("https://api.github.com/users/%s/repos?sort=updated&per_page=100", username)
 		} else {
-			// Public only
-			reqURL = fmt.Sprintf("https://api.github.com/users/%s/repos?sort=updated&per_page=30", username)
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": "No GitHub username or token configured in Settings."})
+			return
 		}
 
 		req, err := http.NewRequestWithContext(r.Context(), "GET", reqURL, nil)
@@ -374,14 +382,22 @@ func HandleListUserRepos(database *db.DB) http.HandlerFunc {
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			log.Printf("api: fetch github repos for %s error: %v", username, err)
+			log.Printf("api: fetch github repos error: %v", err)
 			w.WriteHeader(http.StatusBadGateway)
-			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": fmt.Sprintf("Failed to fetch GitHub repositories for %s", username)})
+			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": "Failed to connect to GitHub API"})
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode == http.StatusUnauthorized {
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"repos": []interface{}{},
+					"error": "GitHub Personal Access Token is invalid or expired. Please update your token in Settings.",
+				})
+				return
+			}
 			w.WriteHeader(resp.StatusCode)
 			json.NewEncoder(w).Encode(map[string]interface{}{"repos": []interface{}{}, "error": fmt.Sprintf("GitHub API returned status %d for user %s", resp.StatusCode, username)})
 			return
@@ -454,6 +470,12 @@ func HandleSettings(database *db.DB) http.HandlerFunc {
 			// Mask the token for security
 			if tok, ok := settings["github_token"]; ok && len(tok) > 8 {
 				settings["github_token"] = tok[:8] + "..." + tok[len(tok)-4:]
+			}
+			if _, ok := settings["routing_mode"]; !ok {
+				settings["routing_mode"] = "path"
+			}
+			if _, ok := settings["base_domain"]; !ok {
+				settings["base_domain"] = "localhost:8090"
 			}
 			json.NewEncoder(w).Encode(settings)
 

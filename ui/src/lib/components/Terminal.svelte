@@ -42,12 +42,9 @@
 		}
 	}
 
-	$effect(() => {
-		if (eventSource) eventSource.close();
-		logs = [];
-		clearCutoff = null;
-		sseConnected = false;
+	let lastUrl = '';
 
+	$effect(() => {
 		let sseUrl = sourceUrl;
 		if (!sseUrl) {
 			sseUrl = `/api/projects/${encodeURIComponent(projectId)}/logs`;
@@ -56,21 +53,34 @@
 			}
 		}
 
-		eventSource = new EventSource(sseUrl);
+		if (sseUrl === lastUrl && eventSource) {
+			return;
+		}
 
-		eventSource.onopen = () => {
+		if (eventSource) {
+			eventSource.close();
+		}
+		lastUrl = sseUrl;
+		sseConnected = false;
+
+		const es = new EventSource(sseUrl);
+		eventSource = es;
+
+		es.onopen = () => {
 			sseConnected = true;
 		};
 
-		eventSource.addEventListener('connected', () => {
+		es.addEventListener('connected', () => {
 			sseConnected = true;
 		});
 
-		eventSource.onmessage = (event) => {
+		es.onmessage = (event) => {
 			try {
 				const evt: LogEvent = JSON.parse(event.data);
-				logs = [...logs, evt];
-				setTimeout(scrollToBottom, 40);
+				if (!logs.some(l => l.timestamp === evt.timestamp && l.message === evt.message)) {
+					logs = [...logs, evt];
+					setTimeout(scrollToBottom, 40);
+				}
 			} catch (e) {
 				logs = [
 					...logs,
@@ -86,12 +96,12 @@
 			}
 		};
 
-		eventSource.onerror = () => {
+		es.onerror = () => {
 			sseConnected = false;
 		};
 
 		return () => {
-			if (eventSource) eventSource.close();
+			es.close();
 		};
 	});
 </script>
@@ -100,10 +110,8 @@
 	<!-- Terminal Bar -->
 	<div class="px-4 py-3 bg-neutral-900 border-b border-neutral-800 flex items-center justify-between shrink-0">
 		<div class="flex items-center gap-2">
-			<span class="w-3 h-3 rounded-full bg-rose-500/80"></span>
-			<span class="w-3 h-3 rounded-full bg-amber-500/80"></span>
-			<span class="w-3 h-3 rounded-full bg-emerald-500/80"></span>
-			<span class="ml-2 text-neutral-400 text-xs font-semibold">{title}</span>
+			<span class="material-symbols-outlined text-neutral-400" style="font-size: 16px">terminal</span>
+			<span class="text-neutral-300 text-xs font-semibold">{title}</span>
 		</div>
 
 		<div class="flex items-center gap-3">

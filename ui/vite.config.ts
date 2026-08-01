@@ -22,8 +22,9 @@ export default defineConfig({
 	],
 	server: {
 		proxy: {
-			// Proxy API calls to the Go backend during dev
+			// Proxy API and app reverse proxy calls to the Go backend during dev
 			'/api': 'http://localhost:8090',
+			'/app': 'http://localhost:8090',
 			'/healthz': 'http://localhost:8090',
 			'/ws': {
 				target: 'http://localhost:8090',
