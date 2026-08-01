@@ -129,6 +129,9 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Public runtime config endpoint
+	mux.HandleFunc("GET /api/config", docker.HandleConfig(database))
+
 	// API root endpoint
 	mux.HandleFunc("GET /api/v1/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -166,8 +169,7 @@ func main() {
 	mux.HandleFunc("/api/containers", docker.HandleListContainers(dockClient, database))
 	mux.HandleFunc("/api/volumes", docker.HandleListVolumes(dockClient))
 	mux.HandleFunc("/api/system/stats", docker.HandleSystemStats(dockClient))
-	// --- Unprotected Public Config & Auth Endpoints ---
-	mux.HandleFunc("GET /api/config", docker.HandleConfig(database))
+	// --- Auth Endpoints (Unprotected) ---
 	mux.HandleFunc("GET /api/auth/status", docker.HandleAuthStatus(database))
 	mux.HandleFunc("POST /api/auth/setup", docker.HandleAuthSetup(database))
 	mux.HandleFunc("POST /api/auth/login", docker.HandleAuthLogin(database))
@@ -342,13 +344,7 @@ func main() {
 			return
 		}
 
-		// 2. Project subdomain in path mode (handles cross-origin XHR from the same domain).
-		if isProjectSubdomain {
-			projectProxyHandler.ServeHTTP(w, r)
-			return
-		}
-
-		// 3. Referer & Cookie fallback: /app/<project>/-hosted SPA making absolute /api/* calls.
+		// 2. Referer & Cookie fallback: /app/<project>/-hosted SPA making absolute /api/* calls.
 		//    Extract project name from Referer or devpanel_project Cookie, inject via header.
 		if strings.HasPrefix(r.URL.Path, "/api/") && !isDevPanelAdminRoute(r.URL.Path) {
 			projectName := ""
@@ -375,7 +371,7 @@ func main() {
 			}
 		}
 
-		// 4. Default: DevPanel Admin API / Web UI multiplexer.
+		// 3. Default: DevPanel Admin API / Web UI static multiplexer.
 		mux.ServeHTTP(w, r)
 	})
 
@@ -438,7 +434,6 @@ func main() {
 
 func isDevPanelAdminRoute(p string) bool {
 	adminPrefixes := []string{
-		"/api/config",
 		"/api/auth/login",
 		"/api/auth/me",
 		"/api/auth/change-password",

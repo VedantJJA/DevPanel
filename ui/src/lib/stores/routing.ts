@@ -1,44 +1,27 @@
 // Shared routing configuration store.
-// Reads routing_mode ('path' | 'subdomain') and base_domain from /api/settings
-// and provides helpers to generate absolute project/service URLs for both modes.
 import { writable, get } from 'svelte/store';
+import { loadConfig, getConfig } from '$lib/runtime/config';
+import { buildProjectUrl as buildUrl } from '$lib/shared/url';
 
 export interface RoutingConfig {
 	mode: 'path' | 'subdomain';
-	baseDomain: string; // e.g. "klouds.online", "140.245.1.2:8090", "localhost:8090"
-}
-
-function autoHost(): string {
-	if (typeof window === 'undefined') return 'localhost:8090';
-	return window.location.host.replace(/^panel\./, '');
+	baseDomain: string; // e.g. "example.com", "140.245.1.2:8090", "localhost:8090"
 }
 
 export const routingConfig = writable<RoutingConfig>({
 	mode: 'path',
-	baseDomain: autoHost()
+	baseDomain: typeof window !== 'undefined' ? window.location.host.replace(/^panel\./, '') : 'localhost:8090'
 });
 
 export async function loadRoutingConfig(): Promise<void> {
 	try {
-		const res = await fetch('/api/settings');
-		if (res.ok) {
-			const s = await res.json();
-			const detectedDomain =
-				s.base_domain ||
-				autoHost();
-			routingConfig.set({
-				mode: s.routing_mode === 'subdomain' ? 'subdomain' : 'path',
-				baseDomain: detectedDomain
-			});
-		}
+		const cfg = await loadConfig();
+		routingConfig.set({
+			mode: cfg.routingMode,
+			baseDomain: cfg.rootDomain
+		});
 	} catch (e) {
 		console.error('Failed to load routing config:', e);
-		if (typeof window !== 'undefined') {
-			routingConfig.set({
-				mode: 'path',
-				baseDomain: autoHost()
-			});
-		}
 	}
 }
 
@@ -64,26 +47,22 @@ export function schemeFor(domain: string): 'http' | 'https' {
 
 /**
  * Returns the absolute public URL for a project's primary service.
- *  - Subdomain mode: https://<project>.<baseDomain>/
- *  - Path mode:      https://<baseDomain>/app/<project>/
  */
 export function getProjectUrl(projectName: string, config?: RoutingConfig): string {
 	const cfg = config ?? get(routingConfig);
-	const domain =
-		cfg.baseDomain || (typeof window !== 'undefined' ? window.location.host : 'localhost:8090');
-	const scheme = schemeFor(domain);
-
-	if (cfg.mode === 'subdomain') {
-		return `${scheme}://${projectName}.${domain}/`;
-	}
-	// Path mode — always generate an absolute URL so it works from any browser
-	return `${scheme}://${domain}/app/${encodeURIComponent(projectName)}/`;
+	const runtimeCfg = getConfig();
+	const mode = cfg?.mode || runtimeCfg.routingMode;
+	const rootDomain = cfg?.baseDomain || runtimeCfg.rootDomain;
+	return buildUrl({
+		routingMode: mode,
+		rootDomain: rootDomain,
+		projectName: projectName,
+		path: '/'
+	});
 }
 
 /**
  * Returns the absolute public URL for a specific service within a project.
- *  - Subdomain mode: https://<service>.<project>.<baseDomain>/
- *  - Path mode:      https://<baseDomain>/app/<project>/<service>/
  */
 export function getServiceUrl(
 	projectName: string,
@@ -91,12 +70,22 @@ export function getServiceUrl(
 	config?: RoutingConfig
 ): string {
 	const cfg = config ?? get(routingConfig);
-	const domain =
-		cfg.baseDomain || (typeof window !== 'undefined' ? window.location.host : 'localhost:8090');
-	const scheme = schemeFor(domain);
+	const runtimeCfg = getConfig();
+	const mode = cfg?.mode || runtimeCfg.routingMode;
+	const rootDomain = cfg?.baseDomain || runtimeCfg.rootDomain;
 
-	if (cfg.mode === 'subdomain') {
-		return `${scheme}://${serviceName}.${projectName}.${domain}/`;
+	if (mode === 'subdomain') {
+		return buildUrl({
+			routingMode: 'subdomain',
+			rootDomain: rootDomain,
+			projectName: `${serviceName}.${projectName}`,
+			path: '/'
+		});
 	}
-	return `${scheme}://${domain}/app/${encodeURIComponent(projectName)}/${encodeURIComponent(serviceName)}/`;
+	return buildUrl({
+		routingMode: 'path',
+		rootDomain: rootDomain,
+		projectName: projectName,
+		path: `/${serviceName}/`
+	});
 }

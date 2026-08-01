@@ -8,8 +8,6 @@
 	import type { ProjectDetail, ServiceRecord, SystemStats } from '$lib/types';
 	import { createLogStore } from '$lib/stores/logs';
 	import { routingConfig, loadRoutingConfig, getProjectUrl, getServiceUrl } from '$lib/stores/routing';
-	import { buildProjectUrl } from '$lib/url';
-	import { getConfig } from '$lib/runtime/config';
 
 
 	let projectId = $derived(page.params.id || '');
@@ -586,7 +584,7 @@
 					</div>
 
 					<div class="flex flex-wrap gap-2">
-						<a href={buildProjectUrl({ routingMode: getConfig().routingMode, rootDomain: getConfig().rootDomain, projectName: projectData?.blueprint?.name || projectId })} target="_blank" rel="noreferrer" class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors hover:opacity-80" style="border-color: var(--outline-variant); background-color: var(--surface-lowest);">
+						<a href={getProjectUrl(projectData?.blueprint?.name || projectId, $routingConfig)} target="_blank" rel="noreferrer" class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors hover:opacity-80" style="border-color: var(--outline-variant); background-color: var(--surface-lowest);">
 							<span class="material-symbols-outlined" style="font-size: 18px">open_in_new</span>Visit Live Site
 						</a>
 						<button onclick={() => triggerDeploy(projectId)} class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-opacity hover:opacity-90" style="background-color: var(--primary); color: var(--on-primary);">

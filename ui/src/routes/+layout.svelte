@@ -4,10 +4,12 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { authState, checkAuthStatus } from '$lib/auth';
+	import { loadRoutingConfig } from '$lib/stores/routing';
 
 	let { children } = $props();
 
 	onMount(async () => {
+		await loadRoutingConfig();
 		const data = await checkAuthStatus();
 		if (data) {
 			if (data.needs_setup && $page.url.pathname !== '/setup') {

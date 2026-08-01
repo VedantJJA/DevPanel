@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -455,6 +454,62 @@ func HandleListUserRepos(database *db.DB) http.HandlerFunc {
 	}
 }
 
+// ConfigResponse holds public runtime configuration returned by GET /api/config.
+type ConfigResponse struct {
+	RootDomain  string `json:"rootDomain"`
+	RoutingMode string `json:"routingMode"`
+	APIBase     string `json:"apiBase"`
+}
+
+// HandleConfig returns unauthenticated public runtime configuration (GET /api/config).
+func HandleConfig(database *db.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: "Method not allowed"})
+			return
+		}
+
+		routingMode := os.Getenv("ROUTING_MODE")
+		if routingMode == "" {
+			if dbMode, err := database.GetSetting(r.Context(), "routing_mode"); err == nil && dbMode != "" {
+				routingMode = dbMode
+			} else {
+				routingMode = "path"
+			}
+		}
+		if routingMode != "subdomain" {
+			routingMode = "path"
+		}
+
+		rootDomain := os.Getenv("ROOT_DOMAIN")
+		if rootDomain == "" {
+			if dbDomain, err := database.GetSetting(r.Context(), "base_domain"); err == nil && dbDomain != "" {
+				rootDomain = dbDomain
+			} else {
+				reqHost := r.Header.Get("X-Forwarded-Host")
+				if reqHost == "" {
+					reqHost = r.Host
+				}
+				rootDomain = reqHost
+			}
+		}
+		rootDomain = strings.TrimPrefix(rootDomain, ".")
+		rootDomain = strings.TrimPrefix(rootDomain, "panel.")
+		rootDomain = strings.TrimSuffix(rootDomain, "/")
+		if rootDomain == "" {
+			rootDomain = "localhost:8090"
+		}
+
+		json.NewEncoder(w).Encode(ConfigResponse{
+			RootDomain:  rootDomain,
+			RoutingMode: routingMode,
+			APIBase:     "/api",
+		})
+	}
+}
+
 // HandleSettings handles GET and POST for /api/settings.
 // GET returns all settings. POST accepts a JSON object of key-value pairs to upsert.
 func HandleSettings(database *db.DB) http.HandlerFunc {
@@ -510,64 +565,6 @@ func HandleSettings(database *db.DB) http.HandlerFunc {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			json.NewEncoder(w).Encode(ErrorResponse{Error: "Method not allowed"})
 		}
-	}
-}
-
-// ConfigResponse represents the public runtime configuration payload for GET /api/config.
-type ConfigResponse struct {
-	RootDomain  string `json:"rootDomain"`
-	RoutingMode string `json:"routingMode"`
-	APIBase     string `json:"apiBase"`
-}
-
-// GetRootDomain resolves the root domain from ROOT_DOMAIN env var or DB setting or request host.
-func GetRootDomain(ctx context.Context, database *db.DB, r *http.Request) string {
-	rootDomain := os.Getenv("ROOT_DOMAIN")
-	if rootDomain == "" && database != nil {
-		rootDomain, _ = database.GetSetting(ctx, "base_domain")
-	}
-	if rootDomain == "" || rootDomain == "localhost:8090" {
-		if r != nil {
-			reqHost := r.Header.Get("X-Forwarded-Host")
-			if reqHost == "" {
-				reqHost = r.Host
-			}
-			if reqHost != "" {
-				rootDomain = reqHost
-			}
-		}
-	}
-	if rootDomain == "" {
-		rootDomain = "localhost:8090"
-	}
-	rootDomain = strings.TrimPrefix(rootDomain, ".")
-	rootDomain = strings.TrimSuffix(rootDomain, "/")
-	rootDomain = strings.TrimPrefix(rootDomain, "panel.")
-	return rootDomain
-}
-
-// GetRoutingModeSetting resolves routing mode from ROUTING_MODE env var or DB setting ("path" | "subdomain").
-func GetRoutingModeSetting(ctx context.Context, database *db.DB) string {
-	mode := os.Getenv("ROUTING_MODE")
-	if mode == "" && database != nil {
-		mode, _ = database.GetSetting(ctx, "routing_mode")
-	}
-	if mode != "subdomain" {
-		mode = "path"
-	}
-	return mode
-}
-
-// HandleConfig handles GET /api/config to return public runtime configuration.
-func HandleConfig(database *db.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp := ConfigResponse{
-			RootDomain:  GetRootDomain(r.Context(), database, r),
-			RoutingMode: GetRoutingModeSetting(r.Context(), database),
-			APIBase:     "/api",
-		}
-		json.NewEncoder(w).Encode(resp)
 	}
 }
 
