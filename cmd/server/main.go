@@ -314,7 +314,9 @@ func main() {
 			// Route ALL requests on a project subdomain directly to that project container.
 			// This includes /api/*, /ws/*, / etc. — no admin API intercept.
 			if isProjectSubdomain {
-				projectProxyHandler.ServeHTTP(w, r)
+				r2 := r.Clone(r.Context())
+				r2.Header.Set(docker.XDevPanelRoutingMode, "subdomain")
+				projectProxyHandler.ServeHTTP(w, r2)
 				return
 			}
 
@@ -340,7 +342,9 @@ func main() {
 				http.Redirect(w, r, fmt.Sprintf("%s://%s%s%s", scheme, baseDomainHost, portSuffix, r.URL.RequestURI()), http.StatusFound)
 				return
 			}
-			projectProxyHandler.ServeHTTP(w, r)
+			r2 := r.Clone(r.Context())
+			r2.Header.Set(docker.XDevPanelRoutingMode, "path")
+			projectProxyHandler.ServeHTTP(w, r2)
 			return
 		}
 
@@ -366,6 +370,7 @@ func main() {
 				// without the path needing to start with /app/<project>.
 				r2 := r.Clone(r.Context())
 				r2.Header.Set(docker.XDevPanelProject, projectName)
+				r2.Header.Set(docker.XDevPanelRoutingMode, "path")
 				projectProxyHandler.ServeHTTP(w, r2)
 				return
 			}
@@ -434,9 +439,8 @@ func main() {
 
 func isDevPanelAdminRoute(p string) bool {
 	adminPrefixes := []string{
-		"/api/auth/login",
-		"/api/auth/me",
-		"/api/auth/change-password",
+		"/api/auth/",
+		"/api/config",
 		"/api/projects",
 		"/api/repos",
 		"/api/containers",

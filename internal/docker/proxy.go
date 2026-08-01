@@ -17,7 +17,10 @@ import (
 // XDevPanelProject is an internal request header set by rootRouter when dispatching
 // a request via Referer-based routing. HandleProjectReverseProxy reads it to
 // identify the target project when the URL path doesn't start with /app/<project>.
-const XDevPanelProject = "X-Devpanel-Project"
+const (
+	XDevPanelProject     = "X-Devpanel-Project"
+	XDevPanelRoutingMode = "X-Devpanel-Routing-Mode"
+)
 
 // retryTransport retries HTTP requests when encountering TCP connection resets during container boot.
 type retryTransport struct {
@@ -135,8 +138,10 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 				projectName = injected
 			}
 		}
-		// Always strip the internal header before forwarding to the upstream.
+		currentRoutingMode := r.Header.Get(XDevPanelRoutingMode)
+		// Always strip internal headers before forwarding to the upstream.
 		r.Header.Del(XDevPanelProject)
+		r.Header.Del(XDevPanelRoutingMode)
 
 		if projectName != "" {
 			http.SetCookie(w, &http.Cookie{
@@ -249,6 +254,9 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 
 		// Dynamically rewrite HTML base and asset URLs to support subpath hosting (/app/<project>/)
 		proxy.ModifyResponse = func(resp *http.Response) error {
+			if currentRoutingMode == "subdomain" {
+				return nil
+			}
 			contentType := resp.Header.Get("Content-Type")
 			if strings.Contains(contentType, "text/html") && resp.Body != nil {
 				bodyBytes, err := io.ReadAll(resp.Body)
