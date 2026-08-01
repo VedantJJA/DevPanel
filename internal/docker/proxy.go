@@ -9,9 +9,32 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/VedantJJA/devpnl/internal/db"
 )
+
+// retryTransport retries HTTP requests when encountering TCP connection resets during container boot.
+type retryTransport struct {
+	base http.RoundTripper
+}
+
+func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	for i := 0; i < 3; i++ {
+		resp, err = base.RoundTrip(req)
+		if err == nil {
+			return resp, nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return resp, err
+}
 
 // findContainerPort finds the public host port for a container belonging to a project service.
 func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName string) int {
@@ -47,7 +70,7 @@ func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName 
 	return 0
 }
 
-// HandleProjectReverseProxy handles routing for /app/{project}/{service}/ and /app/{project}/
+// HandleProjectReverseProxy handles routing for /app/{project}/{service}/ and subdomain routing (*.domain.com, *.nip.io)
 func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Parse project and service names from either URL Path or Subdomain Host header
@@ -57,6 +80,7 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		projectName := ""
 		serviceName := ""
 
+		// 1. Try URL Path /app/{project}/{service}/
 		if strings.HasPrefix(r.URL.Path, "/app/") {
 			p := strings.TrimPrefix(r.URL.Path, "/app/")
 			parts := strings.Split(strings.Trim(p, "/"), "/")
@@ -66,18 +90,42 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 					serviceName = parts[1]
 				}
 			}
-		} else if len(subParts) >= 2 && subParts[0] != "localhost" && subParts[0] != "127" && !strings.Contains(host, "5173") {
-			// Subdomain format: <service>.<project>.<domain> or <project>.<domain>
-			if len(subParts) >= 3 {
-				serviceName = subParts[0]
-				projectName = subParts[1]
-			} else {
-				projectName = subParts[0]
+		}
+
+		// 2. Try Subdomain / Domain Resolution if path /app/ was not used
+		if projectName == "" && len(subParts) >= 2 {
+			first := strings.ToLower(subParts[0])
+			if first != "localhost" && first != "127" && first != "www" && first != "devpanel" {
+				// Pattern A: Check if first subdomain matches a project (e.g. vtopcc.nip.io or vtopcc.domain.com)
+				bpCheck, err := database.GetBlueprint(r.Context(), first)
+				if err == nil && bpCheck != nil {
+					projectName = bpCheck.ID
+				} else if len(subParts) >= 3 {
+					// Pattern B: Check if second subdomain matches a project (e.g. vtopcc-backend.vtopcc.nip.io)
+					second := strings.ToLower(subParts[1])
+					bpCheck2, err2 := database.GetBlueprint(r.Context(), second)
+					if err2 == nil && bpCheck2 != nil {
+						projectName = bpCheck2.ID
+						serviceName = first
+					}
+				}
+
+				// Pattern C: Check if full Host or first subdomain matches a service or custom domain
+				if projectName == "" {
+					svcCheck, _ := database.FindServiceByName(r.Context(), host)
+					if svcCheck == nil {
+						svcCheck, _ = database.FindServiceByName(r.Context(), first)
+					}
+					if svcCheck != nil {
+						projectName = svcCheck.ProjectID
+						serviceName = svcCheck.Name
+					}
+				}
 			}
 		}
 
 		if projectName == "" {
-			http.Error(w, "Project name required in path /app/<project> or subdomain", http.StatusBadRequest)
+			http.Error(w, "Project or service not found for host/path", http.StatusBadRequest)
 			return
 		}
 
@@ -98,6 +146,17 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		if serviceName != "" {
 			for i := range svcs {
 				if strings.EqualFold(svcs[i].Name, serviceName) {
+					targetSvc = &svcs[i]
+					break
+				}
+			}
+		}
+
+		// Intelligent routing fallback when serviceName is omitted:
+		// If request path is an API call (/api/*), route to "web" service (backend API)!
+		if targetSvc == nil && (strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api") {
+			for i := range svcs {
+				if svcs[i].Type == "web" {
 					targetSvc = &svcs[i]
 					break
 				}
@@ -148,8 +207,13 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			return
 		}
 
-		// Reverse proxy handler
+		// Reverse proxy handler with retry transport for container boot resilience
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
+		proxy.Transport = &retryTransport{
+			base: &http.Transport{
+				ResponseHeaderTimeout: 15 * time.Second,
+			},
+		}
 
 		// Dynamically rewrite HTML base and asset URLs to support subpath hosting (/app/<project>/)
 		proxy.ModifyResponse = func(resp *http.Response) error {
@@ -235,19 +299,22 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			}
 		}
 
-		// Strip /app/{project}/{service} or /app/{project} prefix from request path
-		prefixWithSvc := fmt.Sprintf("/app/%s/%s", projectName, targetSvc.Name)
-		prefixBase := fmt.Sprintf("/app/%s", projectName)
-		var relPath string
-		if strings.HasPrefix(r.URL.Path, prefixWithSvc) {
-			relPath = strings.TrimPrefix(r.URL.Path, prefixWithSvc)
-		} else {
-			relPath = strings.TrimPrefix(r.URL.Path, prefixBase)
+		// Strip /app/{project}/{service} or /app/{project} prefix from request path if present
+		if strings.HasPrefix(r.URL.Path, "/app/") {
+			prefixWithSvc := fmt.Sprintf("/app/%s/%s", projectName, targetSvc.Name)
+			prefixBase := fmt.Sprintf("/app/%s", projectName)
+			var relPath string
+			if strings.HasPrefix(r.URL.Path, prefixWithSvc) {
+				relPath = strings.TrimPrefix(r.URL.Path, prefixWithSvc)
+			} else {
+				relPath = strings.TrimPrefix(r.URL.Path, prefixBase)
+			}
+			if relPath == "" || !strings.HasPrefix(relPath, "/") {
+				relPath = "/" + relPath
+			}
+			r.URL.Path = relPath
 		}
-		if relPath == "" || !strings.HasPrefix(relPath, "/") {
-			relPath = "/" + relPath
-		}
-		r.URL.Path = relPath
+
 		proxy.ServeHTTP(w, r)
 	}
 }

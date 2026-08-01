@@ -250,8 +250,48 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	})
 
+	// Project Reverse Proxy Handler
+	projectProxyHandler := docker.HandleProjectReverseProxy(database, dockClient)
+
+	// Subdomain & Referer aware root HTTP router
+	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := strings.Split(r.Host, ":")[0]
+		firstSub := strings.ToLower(strings.Split(host, ".")[0])
+
+		// 1. Explicit /app/ subpath -> always route to project reverse proxy
+		if strings.HasPrefix(r.URL.Path, "/app/") {
+			projectProxyHandler.ServeHTTP(w, r)
+			return
+		}
+
+		// 2. Subdomain check: If host is a project subdomain (e.g. vtopcc.domain.com, vtopcc.nip.io)
+		// and NOT the main devpanel server host (localhost, 127.0.0.1, panel, devpanel, www)
+		if firstSub != "localhost" && firstSub != "127" && firstSub != "panel" && firstSub != "devpanel" && firstSub != "www" {
+			bpCheck, _ := database.GetBlueprint(r.Context(), firstSub)
+			svcCheck, _ := database.FindServiceByName(r.Context(), firstSub)
+			if bpCheck != nil || svcCheck != nil {
+				projectProxyHandler.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		// 3. Referer fallback for subpath hosted apps (/app/<project>/) making root /api/ calls
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			if !isDevPanelAdminRoute(r.URL.Path) {
+				referer := r.Header.Get("Referer")
+				if strings.Contains(referer, "/app/") {
+					projectProxyHandler.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+
+		// 4. Default: DevPanel Admin API / Web UI multiplexer
+		mux.ServeHTTP(w, r)
+	})
+
 	// Wrap root multiplexer with request tracking middleware
-	handler := tracker.Middleware(mux)
+	handler := tracker.Middleware(rootRouter)
 
 	// --- Server Configuration -----------------------------------------------
 	// Note: Avoid setting WriteTimeout on the global server when streaming WebSockets,
@@ -305,4 +345,28 @@ func main() {
 	}
 
 	log.Println("main: shutdown sequence completed cleanly")
+}
+
+func isDevPanelAdminRoute(p string) bool {
+	adminPrefixes := []string{
+		"/api/auth/login",
+		"/api/auth/me",
+		"/api/auth/change-password",
+		"/api/projects",
+		"/api/repos",
+		"/api/containers",
+		"/api/deployments",
+		"/api/blueprints",
+		"/api/volumes",
+		"/api/settings",
+		"/api/stats",
+		"/api/metrics",
+		"/api/logs",
+	}
+	for _, prefix := range adminPrefixes {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return false
 }

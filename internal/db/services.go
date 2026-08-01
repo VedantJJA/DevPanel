@@ -133,3 +133,27 @@ func (d *DB) DeleteServicesForProject(ctx context.Context, projectID string) err
 	}
 	return nil
 }
+
+// FindServiceByName returns a service record by name or custom domain across all projects.
+func (d *DB) FindServiceByName(ctx context.Context, nameOrDomain string) (*ServiceRecord, error) {
+	ctx = contextOrBg(ctx)
+	var s ServiceRecord
+	var envJSON string
+	var ad int
+	q := `
+	SELECT id, project_id, name, type, image, env_json, port, custom_domain,
+	       auto_deploy, build_command, start_command, instance_type, runtime, created_at, updated_at
+	FROM services WHERE name = ? OR custom_domain = ? LIMIT 1`
+	err := d.conn.QueryRowContext(ctx, q, nameOrDomain, nameOrDomain).Scan(
+		&s.ID, &s.ProjectID, &s.Name, &s.Type, &s.Image, &envJSON, &s.Port, &s.CustomDomain,
+		&ad, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.Runtime, &s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("db: find service: %w", err)
+	}
+	_ = json.Unmarshal([]byte(envJSON), &s.EnvVars)
+	s.AutoDeploy = ad == 1
+	return &s, nil
+}
