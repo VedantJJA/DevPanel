@@ -260,10 +260,14 @@ func main() {
 	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		routingMode, baseDomain := getRoutingMode(r.Context(), database, r)
 
-		host := strings.Split(r.Host, ":")[0]
-		firstSub := strings.ToLower(strings.Split(host, ".")[0])
+		host := r.Host
+		hostWithoutPort := strings.Split(host, ":")[0]
+		baseDomainHost := strings.Split(baseDomain, ":")[0]
+		firstSub := strings.ToLower(strings.Split(hostWithoutPort, ".")[0])
 
-		isProjectSubdomain := firstSub != "localhost" && firstSub != "127" &&
+		isProjectSubdomain := hostWithoutPort != baseDomainHost &&
+			hostWithoutPort != "panel."+baseDomainHost &&
+			firstSub != "localhost" && firstSub != "127" &&
 			firstSub != "panel" && firstSub != "devpanel" && firstSub != "www"
 
 		// ── SUBDOMAIN ROUTING MODE ────────────────────────────────────────────
@@ -282,7 +286,11 @@ func main() {
 					if strings.Contains(baseDomain, "localhost") || strings.Contains(baseDomain, "127.0.0.1") {
 						scheme = "http"
 					}
-					http.Redirect(w, r, fmt.Sprintf("%s://%s.%s%s", scheme, projectPart, baseDomain, tail), http.StatusFound)
+					portSuffix := ""
+					if idx := strings.Index(baseDomain, ":"); idx >= 0 {
+						portSuffix = baseDomain[idx:]
+					}
+					http.Redirect(w, r, fmt.Sprintf("%s://%s.%s%s%s", scheme, projectPart, baseDomainHost, portSuffix, tail), http.StatusFound)
 					return
 				}
 			}
@@ -290,16 +298,8 @@ func main() {
 			// Route ALL requests on a project subdomain directly to that project container.
 			// This includes /api/*, /ws/*, / etc. — no admin API intercept.
 			if isProjectSubdomain {
-				bpCheck, _ := database.GetBlueprint(r.Context(), firstSub)
-				if bpCheck != nil {
-					projectProxyHandler.ServeHTTP(w, r)
-					return
-				}
-				svcCheck, _ := database.FindServiceByName(r.Context(), firstSub)
-				if svcCheck != nil {
-					projectProxyHandler.ServeHTTP(w, r)
-					return
-				}
+				projectProxyHandler.ServeHTTP(w, r)
+				return
 			}
 
 			// Fall through: serve DevPanel admin panel (panel.klouds.online itself)
@@ -317,29 +317,34 @@ func main() {
 
 		// 2. Project subdomain in path mode (handles cross-origin XHR from the same domain).
 		if isProjectSubdomain {
-			bpCheck, _ := database.GetBlueprint(r.Context(), firstSub)
-			svcCheck, _ := database.FindServiceByName(r.Context(), firstSub)
-			if bpCheck != nil || svcCheck != nil {
-				projectProxyHandler.ServeHTTP(w, r)
-				return
-			}
+			projectProxyHandler.ServeHTTP(w, r)
+			return
 		}
 
-		// 3. Referer fallback: /app/<project>/-hosted SPA making absolute /api/* calls.
-		//    Extract project name from Referer, inject via header, rewrite handled inside proxy.
+		// 3. Referer & Cookie fallback: /app/<project>/-hosted SPA making absolute /api/* calls.
+		//    Extract project name from Referer or devpanel_project Cookie, inject via header.
 		if strings.HasPrefix(r.URL.Path, "/api/") && !isDevPanelAdminRoute(r.URL.Path) {
+			projectName := ""
+
 			referer := r.Header.Get("Referer")
 			if idx := strings.Index(referer, "/app/"); idx >= 0 {
 				rest := referer[idx+5:] // after "/app/"
-				projectName := strings.SplitN(rest, "/", 2)[0]
-				if projectName != "" {
-					// Inject project name so HandleProjectReverseProxy can identify the target
-					// without the path needing to start with /app/<project>.
-					r2 := r.Clone(r.Context())
-					r2.Header.Set(docker.XDevPanelProject, projectName)
-					projectProxyHandler.ServeHTTP(w, r2)
-					return
+				projectName = strings.SplitN(rest, "/", 2)[0]
+			}
+
+			if projectName == "" {
+				if cookie, err := r.Cookie("devpanel_project"); err == nil && cookie.Value != "" {
+					projectName = cookie.Value
 				}
+			}
+
+			if projectName != "" {
+				// Inject project name so HandleProjectReverseProxy can identify the target
+				// without the path needing to start with /app/<project>.
+				r2 := r.Clone(r.Context())
+				r2.Header.Set(docker.XDevPanelProject, projectName)
+				projectProxyHandler.ServeHTTP(w, r2)
+				return
 			}
 		}
 
@@ -445,6 +450,7 @@ func getRoutingMode(ctx context.Context, database *db.DB, r *http.Request) (mode
 		if reqHost == "" {
 			reqHost = r.Host
 		}
+		reqHost = strings.TrimPrefix(reqHost, "panel.")
 	}
 
 	rmCacheMu.RLock()

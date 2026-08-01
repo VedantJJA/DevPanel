@@ -100,7 +100,7 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		// 2. Try Subdomain / Domain Resolution if path /app/ was not used
 		if projectName == "" && len(subParts) >= 2 {
 			first := strings.ToLower(subParts[0])
-			if first != "localhost" && first != "127" && first != "www" && first != "devpanel" {
+			if first != "localhost" && first != "127" && first != "www" && first != "devpanel" && first != "panel" {
 				// Pattern A: Check if first subdomain matches a project (e.g. vtopcc.nip.io or vtopcc.domain.com)
 				bpCheck, err := database.GetBlueprint(r.Context(), first)
 				if err == nil && bpCheck != nil {
@@ -129,7 +129,7 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			}
 		}
 
-		// Fallback: project injected by rootRouter via referer-based dispatch.
+		// Fallback: project injected by rootRouter via referer/cookie dispatch.
 		if projectName == "" {
 			if injected := r.Header.Get(XDevPanelProject); injected != "" {
 				projectName = injected
@@ -137,6 +137,15 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		}
 		// Always strip the internal header before forwarding to the upstream.
 		r.Header.Del(XDevPanelProject)
+
+		if projectName != "" {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "devpanel_project",
+				Value:    projectName,
+				Path:     "/",
+				SameSite: http.SameSiteLaxMode,
+			})
+		}
 
 		if projectName == "" {
 			http.Error(w, "Project or service not found for host/path", http.StatusBadRequest)

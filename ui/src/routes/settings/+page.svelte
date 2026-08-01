@@ -39,7 +39,7 @@
 				if (s.github_username) githubUsername = s.github_username;
 				if (s.github_token) githubToken = s.github_token;
 				if (s.routing_mode) routingMode = s.routing_mode;
-				baseDomain = (typeof window !== 'undefined' && window.location.host) || s.base_domain || 'localhost:8090';
+				baseDomain = s.base_domain || (typeof window !== 'undefined' ? window.location.host.replace(/^panel\./, '') : 'localhost:8090');
 			}
 			const sRes = await fetch('/api/system/stats');
 			if (sRes.ok) { const s = await sRes.json(); systemStats = { ...systemStats, ...s }; }

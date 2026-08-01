@@ -8,9 +8,14 @@ export interface RoutingConfig {
 	baseDomain: string; // e.g. "klouds.online", "140.245.1.2:8090", "localhost:8090"
 }
 
+function autoHost(): string {
+	if (typeof window === 'undefined') return 'localhost:8090';
+	return window.location.host.replace(/^panel\./, '');
+}
+
 export const routingConfig = writable<RoutingConfig>({
 	mode: 'path',
-	baseDomain: typeof window !== 'undefined' ? window.location.host : 'localhost:8090'
+	baseDomain: autoHost()
 });
 
 export async function loadRoutingConfig(): Promise<void> {
@@ -19,9 +24,8 @@ export async function loadRoutingConfig(): Promise<void> {
 		if (res.ok) {
 			const s = await res.json();
 			const detectedDomain =
-				(typeof window !== 'undefined' && window.location.host) ||
 				s.base_domain ||
-				'localhost:8090';
+				autoHost();
 			routingConfig.set({
 				mode: s.routing_mode === 'subdomain' ? 'subdomain' : 'path',
 				baseDomain: detectedDomain
@@ -32,7 +36,7 @@ export async function loadRoutingConfig(): Promise<void> {
 		if (typeof window !== 'undefined') {
 			routingConfig.set({
 				mode: 'path',
-				baseDomain: window.location.host
+				baseDomain: autoHost()
 			});
 		}
 	}

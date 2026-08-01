@@ -478,6 +478,7 @@ func HandleSettings(database *db.DB) http.HandlerFunc {
 			if reqHost == "" {
 				reqHost = r.Host
 			}
+			reqHost = strings.TrimPrefix(reqHost, "panel.")
 			if storedDomain, ok := settings["base_domain"]; !ok || storedDomain == "" || storedDomain == "localhost:8090" {
 				if reqHost != "" {
 					settings["base_domain"] = reqHost
