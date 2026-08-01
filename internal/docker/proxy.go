@@ -66,10 +66,13 @@ func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName 
 			cleanName := strings.ToLower(strings.TrimPrefix(n, "/"))
 			matched := false
 			for _, t := range targets {
-				if cleanName == t || strings.Contains(cleanName, sName) {
+				if cleanName == t {
 					matched = true
 					break
 				}
+			}
+			if !matched && (strings.HasSuffix(cleanName, "-"+sName) || cleanName == sName) {
+				matched = true
 			}
 			if matched {
 				// 1. Prefer port matching the service's target private port

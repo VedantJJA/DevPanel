@@ -75,12 +75,12 @@ export function getServiceUrl(
 	const rootDomain = cfg?.baseDomain || runtimeCfg.rootDomain;
 
 	if (mode === 'subdomain') {
-		const targetHost = serviceName && serviceName !== projectName ? serviceName : projectName;
+		const isBackend = serviceName && serviceName !== projectName && (serviceName.toLowerCase().includes('backend') || serviceName.toLowerCase().includes('api') || serviceName.toLowerCase().includes('server'));
 		return buildUrl({
 			routingMode: 'subdomain',
 			rootDomain: rootDomain,
-			projectName: targetHost,
-			path: '/'
+			projectName: projectName,
+			path: isBackend ? '/api/' : '/'
 		});
 	}
 	return buildUrl({
