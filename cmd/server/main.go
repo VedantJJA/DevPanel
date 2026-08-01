@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"os/signal"
 	"path"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -253,20 +255,68 @@ func main() {
 	// Project Reverse Proxy Handler
 	projectProxyHandler := docker.HandleProjectReverseProxy(database, dockClient)
 
-	// Subdomain & Referer aware root HTTP router
+	// Subdomain & Referer-aware root HTTP router.
+	// Routing behaviour depends on the "routing_mode" setting (path | subdomain).
 	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		routingMode, baseDomain := getRoutingMode(r.Context(), database)
+
 		host := strings.Split(r.Host, ":")[0]
 		firstSub := strings.ToLower(strings.Split(host, ".")[0])
 
-		// 1. Explicit /app/ subpath -> always route to project reverse proxy
+		isProjectSubdomain := firstSub != "localhost" && firstSub != "127" &&
+			firstSub != "panel" && firstSub != "devpanel" && firstSub != "www"
+
+		// ── SUBDOMAIN ROUTING MODE ────────────────────────────────────────────
+		if routingMode == "subdomain" {
+			// Redirect /app/<project>[/...] → http(s)://<project>.<baseDomain>[/...]
+			if strings.HasPrefix(r.URL.Path, "/app/") {
+				rest := strings.TrimPrefix(r.URL.Path, "/app/")
+				parts := strings.SplitN(rest, "/", 2)
+				if len(parts) > 0 && parts[0] != "" {
+					projectPart := parts[0]
+					tail := ""
+					if len(parts) == 2 {
+						tail = "/" + parts[1]
+					}
+					scheme := "https"
+					if strings.Contains(baseDomain, "localhost") || strings.Contains(baseDomain, "127.0.0.1") {
+						scheme = "http"
+					}
+					http.Redirect(w, r, fmt.Sprintf("%s://%s.%s%s", scheme, projectPart, baseDomain, tail), http.StatusFound)
+					return
+				}
+			}
+
+			// Route ALL requests on a project subdomain directly to that project container.
+			// This includes /api/*, /ws/*, / etc. — no admin API intercept.
+			if isProjectSubdomain {
+				bpCheck, _ := database.GetBlueprint(r.Context(), firstSub)
+				if bpCheck != nil {
+					projectProxyHandler.ServeHTTP(w, r)
+					return
+				}
+				svcCheck, _ := database.FindServiceByName(r.Context(), firstSub)
+				if svcCheck != nil {
+					projectProxyHandler.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			// Fall through: serve DevPanel admin panel (panel.klouds.online itself)
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		// ── PATH ROUTING MODE (default) ───────────────────────────────────────
+
+		// 1. Explicit /app/<project>/... path → project reverse proxy.
 		if strings.HasPrefix(r.URL.Path, "/app/") {
 			projectProxyHandler.ServeHTTP(w, r)
 			return
 		}
 
-		// 2. Subdomain check: If host is a project subdomain (e.g. vtopcc.domain.com, vtopcc.nip.io)
-		// and NOT the main devpanel server host (localhost, 127.0.0.1, panel, devpanel, www)
-		if firstSub != "localhost" && firstSub != "127" && firstSub != "panel" && firstSub != "devpanel" && firstSub != "www" {
+		// 2. Project subdomain in path mode (handles cross-origin XHR from the same domain).
+		if isProjectSubdomain {
 			bpCheck, _ := database.GetBlueprint(r.Context(), firstSub)
 			svcCheck, _ := database.FindServiceByName(r.Context(), firstSub)
 			if bpCheck != nil || svcCheck != nil {
@@ -275,18 +325,25 @@ func main() {
 			}
 		}
 
-		// 3. Referer fallback for subpath hosted apps (/app/<project>/) making root /api/ calls
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if !isDevPanelAdminRoute(r.URL.Path) {
-				referer := r.Header.Get("Referer")
-				if strings.Contains(referer, "/app/") {
-					projectProxyHandler.ServeHTTP(w, r)
+		// 3. Referer fallback: /app/<project>/-hosted SPA making absolute /api/* calls.
+		//    Extract project name from Referer, inject via header, rewrite handled inside proxy.
+		if strings.HasPrefix(r.URL.Path, "/api/") && !isDevPanelAdminRoute(r.URL.Path) {
+			referer := r.Header.Get("Referer")
+			if idx := strings.Index(referer, "/app/"); idx >= 0 {
+				rest := referer[idx+5:] // after "/app/"
+				projectName := strings.SplitN(rest, "/", 2)[0]
+				if projectName != "" {
+					// Inject project name so HandleProjectReverseProxy can identify the target
+					// without the path needing to start with /app/<project>.
+					r2 := r.Clone(r.Context())
+					r2.Header.Set(docker.XDevPanelProject, projectName)
+					projectProxyHandler.ServeHTTP(w, r2)
 					return
 				}
 			}
 		}
 
-		// 4. Default: DevPanel Admin API / Web UI multiplexer
+		// 4. Default: DevPanel Admin API / Web UI multiplexer.
 		mux.ServeHTTP(w, r)
 	})
 
@@ -362,6 +419,7 @@ func isDevPanelAdminRoute(p string) bool {
 		"/api/stats",
 		"/api/metrics",
 		"/api/logs",
+		"/api/system",
 	}
 	for _, prefix := range adminPrefixes {
 		if strings.HasPrefix(p, prefix) {
@@ -369,4 +427,38 @@ func isDevPanelAdminRoute(p string) bool {
 		}
 	}
 	return false
+}
+
+// routingModeCache caches the routing_mode and base_domain settings to avoid a
+// DB round-trip on every HTTP request. The cache TTL is 30 seconds.
+var (
+	rmCache     string
+	bdCache     string
+	rmCacheAt   time.Time
+	rmCacheMu   sync.RWMutex
+)
+
+func getRoutingMode(ctx context.Context, database *db.DB) (mode, baseDomain string) {
+	rmCacheMu.RLock()
+	if time.Since(rmCacheAt) < 30*time.Second {
+		m, d := rmCache, bdCache
+		rmCacheMu.RUnlock()
+		return m, d
+	}
+	rmCacheMu.RUnlock()
+
+	rmCacheMu.Lock()
+	defer rmCacheMu.Unlock()
+	m, _ := database.GetSetting(ctx, "routing_mode")
+	d, _ := database.GetSetting(ctx, "base_domain")
+	if m == "" {
+		m = "path"
+	}
+	if d == "" {
+		d = "localhost:8090"
+	}
+	rmCache = m
+	bdCache = d
+	rmCacheAt = time.Now()
+	return m, d
 }

@@ -14,6 +14,11 @@ import (
 	"github.com/VedantJJA/devpnl/internal/db"
 )
 
+// XDevPanelProject is an internal request header set by rootRouter when dispatching
+// a request via Referer-based routing. HandleProjectReverseProxy reads it to
+// identify the target project when the URL path doesn't start with /app/<project>.
+const XDevPanelProject = "X-Devpanel-Project"
+
 // retryTransport retries HTTP requests when encountering TCP connection resets during container boot.
 type retryTransport struct {
 	base http.RoundTripper
@@ -123,6 +128,15 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 				}
 			}
 		}
+
+		// Fallback: project injected by rootRouter via referer-based dispatch.
+		if projectName == "" {
+			if injected := r.Header.Get(XDevPanelProject); injected != "" {
+				projectName = injected
+			}
+		}
+		// Always strip the internal header before forwarding to the upstream.
+		r.Header.Del(XDevPanelProject)
 
 		if projectName == "" {
 			http.Error(w, "Project or service not found for host/path", http.StatusBadRequest)

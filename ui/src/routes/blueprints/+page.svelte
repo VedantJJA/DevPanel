@@ -2,6 +2,8 @@
 	import { onMount } from 'svelte';
 	import AppShell from '$lib/components/AppShell.svelte';
 	import type { BlueprintItem, SystemStats } from '$lib/types';
+	import { routingConfig, loadRoutingConfig, getProjectUrl } from '$lib/stores/routing';
+
 
 	let blueprints = $state<BlueprintItem[]>([]);
 	let loading = $state(true);
@@ -50,7 +52,11 @@
 		} catch (e) { console.error(e); } finally { actionLoading = null; }
 	}
 
-	onMount(fetchData);
+	onMount(async () => {
+		await loadRoutingConfig();
+		fetchData();
+	});
+
 </script>
 
 <AppShell {systemStats}>
@@ -113,14 +119,15 @@
 						<span>{bp.serviceCount ?? bp.service_count_actual ?? 0} services</span>
 						<div class="flex gap-2">
 							<a
-								href={`/app/${encodeURIComponent(bp.name)}/`}
-								target="_blank"
-								class="flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-slate-100"
-								style="border-color: var(--outline-variant); color: var(--on-surface)"
-							>
-								<span class="material-symbols-outlined" style="font-size: 16px">open_in_new</span>
-								App Link
-							</a>
+						href={getProjectUrl(bp.name, $routingConfig)}
+						target="_blank"
+						rel="noopener noreferrer"
+						class="flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-slate-100"
+						style="border-color: var(--outline-variant); color: var(--on-surface)"
+					>
+						<span class="material-symbols-outlined" style="font-size: 16px">open_in_new</span>
+						{$routingConfig.mode === 'subdomain' ? `${bp.name}.${$routingConfig.baseDomain}` : 'App Link'}
+					</a>
 							<button
 								onclick={(e) => { e.stopPropagation(); deployBlueprint(bp); }}
 								disabled={actionLoading === bp.id}
