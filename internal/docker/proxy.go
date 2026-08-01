@@ -177,7 +177,14 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		// Find blueprint / services for project
 		bp, err := database.GetBlueprint(r.Context(), projectName)
 		if err != nil || bp == nil {
-			http.Error(w, fmt.Sprintf("Project %q not found", projectName), http.StatusNotFound)
+			if svcCheck, _ := database.FindServiceByName(r.Context(), projectName); svcCheck != nil {
+				serviceName = svcCheck.Name
+				projectName = svcCheck.ProjectID
+				bp, err = database.GetBlueprint(r.Context(), projectName)
+			}
+		}
+		if err != nil || bp == nil {
+			http.Error(w, fmt.Sprintf("Project or service %q not found", projectName), http.StatusNotFound)
 			return
 		}
 
