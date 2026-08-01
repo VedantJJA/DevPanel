@@ -311,6 +311,19 @@ func main() {
 
 		// 1. Explicit /app/<project>/... path → project reverse proxy.
 		if strings.HasPrefix(r.URL.Path, "/app/") {
+			// If requested via panel.<domain> in path mode, redirect to <domain>/app/<project>
+			if strings.HasPrefix(hostWithoutPort, "panel.") {
+				scheme := "https"
+				if strings.Contains(baseDomain, "localhost") || strings.Contains(baseDomain, "127.0.0.1") {
+					scheme = "http"
+				}
+				portSuffix := ""
+				if idx := strings.Index(baseDomain, ":"); idx >= 0 {
+					portSuffix = baseDomain[idx:]
+				}
+				http.Redirect(w, r, fmt.Sprintf("%s://%s%s%s", scheme, baseDomainHost, portSuffix, r.URL.RequestURI()), http.StatusFound)
+				return
+			}
 			projectProxyHandler.ServeHTTP(w, r)
 			return
 		}

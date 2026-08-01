@@ -1,4 +1,33 @@
+import { get } from 'svelte/store';
+import { routingConfig, schemeFor } from './stores/routing';
 import type { ScanResult, ProjectDetail, ServiceRecord, DeploymentRecord } from './types';
+
+/**
+ * Resolves the dynamic backend API base URL for a hosted project service.
+ * - Path mode: https://<domain>/app/<project>/<service>/
+ * - Subdomain mode: https://<service>.<project>.<domain>/
+ */
+export function getProjectServiceApiUrl(
+	projectName: string,
+	serviceName?: string,
+	path: string = ''
+): string {
+	const cfg = get(routingConfig);
+	const domain =
+		cfg.baseDomain || (typeof window !== 'undefined' ? window.location.host.replace(/^panel\./, '') : 'localhost:8090');
+	const scheme = schemeFor(domain);
+	const cleanPath = path ? (path.startsWith('/') ? path : '/' + path) : '';
+
+	if (cfg.mode === 'subdomain') {
+		const hostWithoutPort = domain.split(':')[0];
+		const portSuffix = domain.includes(':') ? ':' + domain.split(':')[1] : '';
+		const svcPrefix = serviceName ? `${serviceName}.${projectName}` : projectName;
+		return `${scheme}://${svcPrefix}.${hostWithoutPort}${portSuffix}${cleanPath}`;
+	}
+
+	const svcPath = serviceName ? `/${encodeURIComponent(serviceName)}` : '';
+	return `${scheme}://${domain}/app/${encodeURIComponent(projectName)}${svcPath}${cleanPath}`;
+}
 
 export async function scanRepo(repoUrl: string, appName: string): Promise<ScanResult> {
 	const res = await fetch('/api/repos/scan', {
