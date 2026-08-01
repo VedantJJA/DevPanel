@@ -49,7 +49,7 @@ export interface ServiceRecord {
 	id?: number;
 	project_id: string;
 	name: string;
-	type: 'web' | 'static' | 'database' | 'worker';
+	type: 'web' | 'static' | 'database' | 'worker' | 'postgres' | string;
 	env_vars: Record<string, string>;
 	port: number;
 	custom_domain: string;
@@ -57,6 +57,7 @@ export interface ServiceRecord {
 	build_command: string;
 	start_command: string;
 	instance_type: string;
+	runtime?: string;
 	created_at?: string;
 	updated_at?: string;
 }

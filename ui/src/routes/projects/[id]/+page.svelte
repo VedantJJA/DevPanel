@@ -11,8 +11,8 @@
 
 	let projectData = $state<ProjectDetail | null>(null);
 	let activeServiceIdx = $state(0);
-	let activeTab = $state<string>('events');
-	let logType = $state<'build' | 'live' | '1h' | '24h'>('live');
+	let activeTab = $state<string>('logs');
+	let logType = $state<'build' | 'live' | '1h' | '24h'>('build');
 
 	let isSaving = $state(false);
 	let saveMessage = $state<string | null>(null);
@@ -88,14 +88,14 @@
 					{
 						title: 'DASHBOARD',
 						items: [
-							{ id: 'events', label: 'Events', icon: 'event_note' },
+							{ id: 'logs', label: 'Build & Deploy Logs', icon: 'terminal' },
+							{ id: 'events', label: 'Events Audit', icon: 'event_note' },
 							{ id: 'settings', label: 'Build & Deploy', icon: 'settings' }
 						]
 					},
 					{
 						title: 'MONITOR',
 						items: [
-							{ id: 'logs', label: 'Build Logs', icon: 'terminal' },
 							{ id: 'metrics', label: 'Edge Metrics', icon: 'query_stats' }
 						]
 					},
@@ -114,14 +114,14 @@
 					{
 						title: 'DASHBOARD',
 						items: [
-							{ id: 'events', label: 'Events', icon: 'event_note' },
+							{ id: 'logs', label: 'Build & Live Logs', icon: 'terminal' },
+							{ id: 'events', label: 'Events Audit', icon: 'event_note' },
 							{ id: 'settings', label: 'Service Settings', icon: 'settings' }
 						]
 					},
 					{
 						title: 'MONITOR',
 						items: [
-							{ id: 'logs', label: 'Logs', icon: 'terminal' },
 							{ id: 'metrics', label: 'Metrics', icon: 'query_stats' }
 						]
 					},
@@ -772,7 +772,7 @@
 
 							<!-- Instance Sizing Cards from web_service_settings_cloudstack -->
 							<div>
-								<label class="label-caps block text-xs mb-2" style="color: var(--on-surface-variant)">Instance Type Sizing</label>
+								<span id="instance-type-label" class="label-caps block text-xs mb-2" style="color: var(--on-surface-variant)">Instance Type Sizing</span>
 								<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
 									<button type="button" onclick={() => (selectedInstanceType = 'shared')} class="p-4 border-2 rounded-lg text-left transition-all" style={selectedInstanceType === 'shared' ? 'border-color: var(--primary); background-color: var(--surface-low);' : 'border-color: var(--outline-variant); background-color: var(--surface-lowest);'}>
 										<div class="flex justify-between items-start mb-1">

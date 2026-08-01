@@ -29,6 +29,7 @@ type Blueprint struct {
 
 // ServiceConfig represents a single application service or microservice in the blueprint.
 type ServiceConfig struct {
+	Runtime      string        `yaml:"runtime" json:"runtime"`           // "Python", "Node.js", "Go", "Rust", "Ruby"
 	Type         string        `yaml:"type" json:"type"`                 // "web", "static", "database", "worker"
 	Image        string        `yaml:"image" json:"image"`               // pre-built image (e.g. "postgres:15")
 	Source       SourceConfig  `yaml:"source" json:"source"`             // monorepo source details
@@ -261,7 +262,21 @@ func (o *BlueprintOrchestrator) buildServiceImage(ctx context.Context, serviceNa
 	}
 
 	engine := strings.ToLower(strings.TrimSpace(cfg.Build.Engine))
+	if engine == "" {
+		engine = strings.ToLower(strings.TrimSpace(cfg.Runtime))
+	}
 	svcType := strings.ToLower(strings.TrimSpace(cfg.Type))
+
+	// Normalize engine names (e.g. "python 3", "python", "py" -> "python")
+	if strings.Contains(engine, "python") || strings.Contains(engine, "py") {
+		engine = "python"
+	} else if strings.Contains(engine, "go") {
+		engine = "go"
+	} else if strings.Contains(engine, "rust") {
+		engine = "rust"
+	} else if strings.Contains(engine, "ruby") {
+		engine = "ruby"
+	}
 
 	// Auto-detect engine from repository files if not explicitly set in blueprint config
 	if engine == "" && svcType != "static" {
@@ -580,10 +595,10 @@ func generateStaticDockerfile(destPath string, outputDir string, buildCmd string
 		cleanBuildCmd = "npm run build"
 	}
 
-	content := fmt.Sprintf(`FROM node:20-alpine AS builder
+	content := fmt.Sprintf(`FROM node:22-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN if [ -f package.json ]; then npm install --legacy-peer-deps || npm install; fi
+RUN if [ -f package-lock.json ]; then npm ci --prefer-offline --no-audit --no-fund --legacy-peer-deps || npm install --prefer-offline --no-audit --no-fund --legacy-peer-deps; elif [ -f package.json ]; then npm install --prefer-offline --no-audit --no-fund --legacy-peer-deps; fi
 COPY . .
 RUN if [ -f package.json ]; then %s || true; fi
 RUN mkdir -p /app/output_dist && \
@@ -605,22 +620,26 @@ CMD ["nginx", "-g", "daemon off;"]
 
 // generateNodeDockerfile writes a production-ready Node.js Dockerfile.
 func generateNodeDockerfile(destPath string, buildCmd string, startCmd string) error {
-	if buildCmd == "" {
-		buildCmd = "npm ci || npm install"
+	cleanBuildCmd := strings.TrimSpace(buildCmd)
+	if cleanBuildCmd == "npm ci || npm install" || cleanBuildCmd == "npm install && npm run build" || cleanBuildCmd == "npm ci && npm run build" {
+		cleanBuildCmd = "if grep -q '\"build\":' package.json 2>/dev/null; then npm run build; fi"
+	}
+	if cleanBuildCmd == "" {
+		cleanBuildCmd = "echo 'No extra build step'"
 	}
 	if startCmd == "" {
 		startCmd = "npm start"
 	}
 
-	content := fmt.Sprintf(`FROM node:22-alpine
+	content := fmt.Sprintf(`FROM node:22-slim
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci || npm install
+RUN if [ -f package-lock.json ]; then npm ci --prefer-offline --no-audit --no-fund --legacy-peer-deps || npm install --prefer-offline --no-audit --no-fund --legacy-peer-deps; elif [ -f package.json ]; then npm install --prefer-offline --no-audit --no-fund --legacy-peer-deps; fi
 COPY . .
 RUN %s
 EXPOSE 8080
 CMD ["sh", "-c", "%s"]
-`, buildCmd, startCmd)
+`, cleanBuildCmd, startCmd)
 	return os.WriteFile(destPath, []byte(content), 0644)
 }
 

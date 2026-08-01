@@ -117,6 +117,9 @@ func (b *LogBroadcaster) loadHistory(projectID string) {
 				history = append(history, evt)
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("broadcaster: scanner error loading history for %s: %v", projectID, err)
+		}
 		b.history[projectID] = history
 	}
 	b.historyLoaded[projectID] = true

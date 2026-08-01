@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -186,7 +188,7 @@ func HandleGetProject(database *db.DB) http.HandlerFunc {
 }
 
 // HandleDeleteProject — DELETE /api/projects/{id}
-// Stops & removes all containers, deletes DB records, and purges build logs.
+// Stops & removes all containers, purges build images & cache, deletes DB records, and clears logs.
 func HandleDeleteProject(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -202,24 +204,62 @@ func HandleDeleteProject(database *db.DB, dockClient *Client) http.HandlerFunc {
 			return
 		}
 
-		// Stop and remove all containers for this project
+		projectSlug := strings.ToLower(strings.TrimPrefix(projectID, "bp-"))
+
+		// 1. Stop & Remove known service containers from DB records
 		svcs, _ := database.ListServices(r.Context(), projectID)
-		projectSlug := strings.TrimPrefix(projectID, "bp-")
 		for _, svc := range svcs {
-			containerName := fmt.Sprintf("devpnl-%s-%s", projectSlug, svc.Name)
-			_ = dockClient.StopContainer(r.Context(), containerName)
-			_ = dockClient.RemoveContainer(r.Context(), containerName, true)
+			svcName := strings.ToLower(svc.Name)
+			cName1 := fmt.Sprintf("devpnl-%s-%s", projectSlug, svcName)
+			cName2 := fmt.Sprintf("devpnl-%s-%s", projectID, svcName)
+			_ = dockClient.StopContainer(r.Context(), cName1)
+			_ = dockClient.RemoveContainer(r.Context(), cName1, true)
+			_ = dockClient.StopContainer(r.Context(), cName2)
+			_ = dockClient.RemoveContainer(r.Context(), cName2, true)
 		}
 
-		// Re-sync Nginx dynamic routing state
+		// 2. Query Docker API to find and stop ALL containers matching project slug/id
+		allContainers, err := dockClient.ListContainers(r.Context())
+		if err == nil {
+			for _, c := range allContainers {
+				var nameClean string
+				if len(c.Names) > 0 {
+					nameClean = strings.TrimPrefix(c.Names[0], "/")
+				} else {
+					nameClean = strings.TrimPrefix(c.ID, "/")
+				}
+				if strings.HasPrefix(nameClean, fmt.Sprintf("devpnl-%s-", projectSlug)) ||
+					strings.HasPrefix(nameClean, fmt.Sprintf("devpnl-%s-", projectID)) ||
+					(projectSlug != "" && strings.Contains(nameClean, projectSlug)) {
+					log.Printf("projects: stopping & removing container %s for deleted project %s", nameClean, projectID)
+					_ = dockClient.StopContainer(r.Context(), nameClean)
+					_ = dockClient.RemoveContainer(r.Context(), nameClean, true)
+				}
+			}
+		}
+
+		// 3. Purge temp build cache directories for this project
+		tempDir := os.TempDir()
+		if entries, err := os.ReadDir(tempDir); err == nil {
+			prefix := fmt.Sprintf("devpanel-blueprint-%s-", projectSlug)
+			for _, entry := range entries {
+				if entry.IsDir() && strings.HasPrefix(entry.Name(), prefix) {
+					targetPath := filepath.Join(tempDir, entry.Name())
+					_ = os.RemoveAll(targetPath)
+					log.Printf("projects: purged build cache directory %s", targetPath)
+				}
+			}
+		}
+
+		// 4. Re-sync Nginx dynamic routing state
 		if err := globalNginxManager.SyncNginx(dockClient); err != nil {
 			log.Printf("nginx_manager: sync failed after deleting project %s: %v", projectID, err)
 		}
 
-		// Purge build logs from memory and disk
+		// 5. Purge build logs from memory and disk
 		globalLogBroadcaster.ClearLogs(projectID)
 
-		// Delete DB records (services, deployments, blueprint)
+		// 6. Delete DB records (services, deployments, blueprint)
 		if err := database.DeleteBlueprint(r.Context(), projectID); err != nil {
 			log.Printf("api: delete project %s: %v", projectID, err)
 			w.WriteHeader(http.StatusInternalServerError)
