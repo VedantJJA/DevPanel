@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -140,6 +141,39 @@ func (c *Client) ConfigureOnDemandTLS(ctx context.Context, askURL string) error 
 	log.Printf("caddy: configuring On-Demand TLS → %s", askURL)
 
 	return c.patch(ctx, url, body)
+}
+
+// GenerateCaddyfileBlock generates a strict Caddyfile reverse proxy block:
+// <project-name>.<domain> {
+//     reverse_proxy <containerTarget>
+// }
+func GenerateCaddyfileBlock(projectName, domain, containerTarget string) string {
+	cleanDomain := strings.TrimPrefix(domain, "panel.")
+	fqdn := fmt.Sprintf("%s.%s", projectName, cleanDomain)
+	return fmt.Sprintf("%s {\n\treverse_proxy %s\n}\n", fqdn, containerTarget)
+}
+
+// LoadCaddyfile sends a Caddyfile payload to Caddy's admin endpoint (POST /load) to apply config instantly.
+func (c *Client) LoadCaddyfile(ctx context.Context, caddyfileContent string) error {
+	url := fmt.Sprintf("%s/load", c.adminURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader([]byte(caddyfileContent)))
+	if err != nil {
+		return fmt.Errorf("caddy: create load request: %w", err)
+	}
+	req.Header.Set("Content-Type", "text/caddyfile")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("caddy: load caddyfile: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("caddy: load caddyfile: HTTP %d: %s", resp.StatusCode, body)
+	}
+	log.Printf("caddy: successfully loaded Caddyfile configuration via POST /load")
+	return nil
 }
 
 // ---------- Health ----------------------------------------------------------

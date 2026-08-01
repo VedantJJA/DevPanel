@@ -3,6 +3,20 @@ import { routingConfig, schemeFor } from './stores/routing';
 import type { ScanResult, ProjectDetail, ServiceRecord, DeploymentRecord } from './types';
 
 /**
+ * Resolves the API endpoint URL dynamically:
+ * Checks VITE_BACKEND_URL or VITE_API_URL environment configuration if present,
+ * or resolves based on the current host.
+ */
+export function getApiUrl(path: string): string {
+	const cleanPath = path.startsWith('/') ? path : '/' + path;
+	const envBackend = (import.meta as any).env?.VITE_BACKEND_URL || (import.meta as any).env?.VITE_API_URL;
+	if (envBackend) {
+		return `${envBackend.replace(/\/$/, '')}${cleanPath}`;
+	}
+	return cleanPath;
+}
+
+/**
  * Resolves the dynamic backend API base URL for a hosted project service.
  * - Path mode: https://<domain>/app/<project>/<service>/
  * - Subdomain mode: https://<service>.<project>.<domain>/
@@ -30,7 +44,7 @@ export function getProjectServiceApiUrl(
 }
 
 export async function scanRepo(repoUrl: string, appName: string): Promise<ScanResult> {
-	const res = await fetch('/api/repos/scan', {
+	const res = await fetch(getApiUrl('/api/repos/scan'), {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ repo_url: repoUrl, app_name: appName })
@@ -48,7 +62,7 @@ export async function createProject(payload: {
 	blueprint: any;
 	services: any[];
 }): Promise<ProjectDetail> {
-	const res = await fetch('/api/projects', {
+	const res = await fetch(getApiUrl('/api/projects'), {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(payload)
@@ -61,13 +75,13 @@ export async function createProject(payload: {
 }
 
 export async function listProjects(): Promise<{ projects: any[] }> {
-	const res = await fetch('/api/projects');
+	const res = await fetch(getApiUrl('/api/projects'));
 	if (!res.ok) throw new Error('Failed to list projects');
 	return res.json();
 }
 
 export async function getProject(id: string): Promise<ProjectDetail> {
-	const res = await fetch(`/api/projects/${encodeURIComponent(id)}`);
+	const res = await fetch(getApiUrl(`/api/projects/${encodeURIComponent(id)}`));
 	if (!res.ok) throw new Error('Failed to fetch project details');
 	return res.json();
 }
@@ -78,7 +92,7 @@ export async function updateService(
 	updates: Partial<ServiceRecord>
 ): Promise<ServiceRecord> {
 	const res = await fetch(
-		`/api/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceName)}`,
+		getApiUrl(`/api/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceName)}`),
 		{
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
@@ -92,7 +106,7 @@ export async function updateService(
 export async function triggerDeploy(
 	projectId: string
 ): Promise<{ deployment_id: string; project_id: string; status: string; log_url: string }> {
-	const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/deploy`, {
+	const res = await fetch(getApiUrl(`/api/projects/${encodeURIComponent(projectId)}/deploy`), {
 		method: 'POST'
 	});
 	if (!res.ok) {
@@ -103,14 +117,14 @@ export async function triggerDeploy(
 }
 
 export async function listDeployments(projectId: string): Promise<{ deployments: DeploymentRecord[] }> {
-	const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/deployments`);
+	const res = await fetch(getApiUrl(`/api/projects/${encodeURIComponent(projectId)}/deployments`));
 	if (!res.ok) throw new Error('Failed to fetch deployment history');
 	return res.json();
 }
 
 export async function restartService(projectId: string, serviceName: string): Promise<any> {
 	const res = await fetch(
-		`/api/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceName)}/restart`,
+		getApiUrl(`/api/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceName)}/restart`),
 		{
 			method: 'POST'
 		}
