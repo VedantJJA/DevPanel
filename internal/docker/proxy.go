@@ -34,8 +34,27 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
+
+	var bodyBytes []byte
+	if req.Body != nil {
+		var readErr error
+		bodyBytes, readErr = io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+
 	for i := 0; i < 3; i++ {
-		resp, err = base.RoundTrip(req)
+		reqCopy := req.Clone(req.Context())
+		if bodyBytes != nil {
+			reqCopy.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			reqCopy.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+			}
+		}
+
+		resp, err = base.RoundTrip(reqCopy)
 		if err == nil {
 			return resp, nil
 		}
@@ -222,12 +241,12 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			}
 		}
 
-		// Set cookie for referer-based routing fallback
+		// Set cookie for referer-based routing fallback (scoped to /app/<slug>/)
 		if resolvedSlug != "" {
 			http.SetCookie(w, &http.Cookie{
 				Name:     "devpanel_project",
 				Value:    resolvedSlug,
-				Path:     "/",
+				Path:     fmt.Sprintf("/app/%s/", resolvedSlug),
 				SameSite: http.SameSiteLaxMode,
 			})
 		}

@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -360,6 +361,16 @@ func main() {
 			if idx := strings.Index(referer, "/app/"); idx >= 0 {
 				rest := referer[idx+5:] // after "/app/"
 				serviceSlug = strings.SplitN(rest, "/", 2)[0]
+			} else if referer != "" {
+				if refURL, err := url.Parse(referer); err == nil && refURL.Host != "" {
+					refHost := strings.Split(refURL.Host, ":")[0]
+					if refHost != baseDomainHost && !strings.HasPrefix(refHost, "panel.") {
+						first := strings.ToLower(strings.Split(refHost, ".")[0])
+						if first != "localhost" && first != "127" && first != "www" && first != "devpanel" && first != "panel" {
+							serviceSlug = first
+						}
+					}
+				}
 			}
 
 			if serviceSlug == "" {
@@ -442,8 +453,11 @@ func main() {
 }
 
 func isDevPanelAdminRoute(p string) bool {
+	// Only exact DevPanel admin authentication endpoints are reserved
+	if p == "/api/auth/status" || p == "/api/auth/setup" || p == "/api/auth/login" || p == "/api/auth/logout" {
+		return true
+	}
 	adminPrefixes := []string{
-		"/api/auth/",
 		"/api/config",
 		"/api/projects",
 		"/api/repos",
@@ -464,6 +478,7 @@ func isDevPanelAdminRoute(p string) bool {
 	}
 	return false
 }
+
 
 // routingModeCache caches the routing_mode and base_domain settings to avoid a
 // DB round-trip on every HTTP request. The cache TTL is 30 seconds.
