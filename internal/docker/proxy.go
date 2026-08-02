@@ -168,13 +168,18 @@ func HandleGetRouteLogs() http.HandlerFunc {
 // and automatically reroutes API/XHR requests from a static/frontend service to the project's web/backend container.
 func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		host := strings.Split(r.Host, ":")[0]
+		effectiveHost := r.Header.Get("X-Forwarded-Host")
+		if effectiveHost == "" {
+			effectiveHost = r.Host
+		}
+		host := strings.Split(effectiveHost, ":")[0]
 
 		resolvedSlug := ""
 		prefixToStrip := ""
 
-		// 1. Coolify Primary Lookup: Check if r.Host matches a stored service FQDN
-		svcFQDN, _ := database.FindServiceByFQDN(r.Context(), r.Host)
+		// 1. Coolify Primary Lookup: Check if effectiveHost matches a stored service FQDN
+		svcFQDN, _ := database.FindServiceByFQDN(r.Context(), effectiveHost)
+
 
 		// 2. Try URL Path /app/{slug}/... or /app/{project}/{service}/...
 		if svcFQDN == nil && strings.HasPrefix(r.URL.Path, "/app/") {

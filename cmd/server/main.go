@@ -274,15 +274,20 @@ func main() {
 
 	// Coolify-Style Complete Domain Router
 	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. Check if r.Host matches any service FQDN or custom domain
-		svcFQDN, _ := database.FindServiceByFQDN(r.Context(), r.Host)
+		effectiveHost := r.Header.Get("X-Forwarded-Host")
+		if effectiveHost == "" {
+			effectiveHost = r.Host
+		}
+
+		// 1. Check if effectiveHost matches any service FQDN or custom domain
+		svcFQDN, _ := database.FindServiceByFQDN(r.Context(), effectiveHost)
 		if svcFQDN != nil {
 			projectProxyHandler.ServeHTTP(w, r)
 			return
 		}
 
 		// 2. Check if request is on a project subdomain
-		hostWithoutPort := strings.Split(r.Host, ":")[0]
+		hostWithoutPort := strings.Split(effectiveHost, ":")[0]
 		firstSub := strings.ToLower(strings.Split(hostWithoutPort, ".")[0])
 		isProjectSubdomain := firstSub != "localhost" && firstSub != "127" &&
 			firstSub != "panel" && firstSub != "devpanel" && firstSub != "www" &&
@@ -292,6 +297,7 @@ func main() {
 			projectProxyHandler.ServeHTTP(w, r)
 			return
 		}
+
 
 		// 3. Application API/Data calls (/api/* or /data/*) made by hosted SPAs
 		if !isDevPanelAdminRoute(r.URL.Path) && (strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/data/") || strings.HasPrefix(r.URL.Path, "/auth/")) {
