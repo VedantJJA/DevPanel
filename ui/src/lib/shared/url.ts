@@ -1,5 +1,5 @@
 export function buildProjectUrl(opts: {
-	routingMode: 'path' | 'subdomain';
+	routingMode?: string;
 	rootDomain: string;
 	projectName: string;
 	path?: string;
@@ -11,8 +11,6 @@ export function buildProjectUrl(opts: {
 		.replace(/^panel\./, '')
 		.replace(/^\./, '')
 		.replace(/\/$/, '');
-	if (opts.routingMode === 'subdomain') {
-		return `https://${safeName}.${cleanDomain}${cleanPath}`;
-	}
-	return `https://${cleanDomain}/app/${safeName}${cleanPath}`;
+
+	return `https://${safeName}.${cleanDomain}${cleanPath}`;
 }

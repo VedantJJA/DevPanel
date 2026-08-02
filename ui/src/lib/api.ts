@@ -18,12 +18,8 @@ export function getApiUrl(path: string): string {
 
 /**
  * Resolves the dynamic backend API base URL for a hosted project service.
- * Uses the service's unique slug (Render-style) for routing.
- * - Path mode: https://<domain>/app/<slug>/
- * - Subdomain mode: https://<slug>.<domain>/
- *
- * When calling a backend API from a frontend service, pass the backend service's slug
- * so requests route to the correct container.
+ * Uses the service's unique slug (Coolify FQDN style) for routing:
+ * https://<slug>.<domain>/
  */
 export function getProjectServiceApiUrl(
 	projectName: string,
@@ -37,17 +33,12 @@ export function getProjectServiceApiUrl(
 	const scheme = schemeFor(domain);
 	const cleanPath = path ? (path.startsWith('/') ? path : '/' + path) : '';
 
-	// Use slug for URL construction (Render-style)
 	const urlIdentifier = serviceSlug || serviceName || projectName;
-
-	if (cfg.mode === 'subdomain') {
-		const hostWithoutPort = domain.split(':')[0];
-		const portSuffix = domain.includes(':') ? ':' + domain.split(':')[1] : '';
-		return `${scheme}://${urlIdentifier}.${hostWithoutPort}${portSuffix}${cleanPath}`;
-	}
-
-	return `${scheme}://${domain}/app/${encodeURIComponent(urlIdentifier)}${cleanPath}`;
+	const hostWithoutPort = domain.split(':')[0];
+	const portSuffix = domain.includes(':') ? ':' + domain.split(':')[1] : '';
+	return `${scheme}://${urlIdentifier}.${hostWithoutPort}${portSuffix}${cleanPath}`;
 }
+
 
 export async function scanRepo(repoUrl: string, appName: string): Promise<ScanResult> {
 	const res = await fetch(getApiUrl('/api/repos/scan'), {

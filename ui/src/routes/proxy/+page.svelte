@@ -94,7 +94,8 @@
 			<div class="flex flex-col items-center py-10 text-center">
 				<span class="material-symbols-outlined mb-2" style="font-size: 36px; color: var(--outline)">alt_route</span>
 				<p class="text-sm" style="color: var(--on-surface-variant)">No request routes captured yet.</p>
-				<p class="mt-1 text-xs" style="color: var(--on-surface-variant)">Requests to hosted applications (/app/&lt;slug&gt;/ or subdomains) will appear here instantly.</p>
+				<p class="mt-1 text-xs" style="color: var(--on-surface-variant)">Requests to hosted application domains will appear here instantly.</p>
+
 			</div>
 		{:else}
 			<div class="overflow-x-auto">

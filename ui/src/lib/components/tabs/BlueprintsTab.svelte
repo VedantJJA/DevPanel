@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { BlueprintItem } from '$lib/types';
+	import { getProjectUrl } from '$lib/stores/routing';
+
 
 	interface Props {
 		blueprints: BlueprintItem[];
@@ -72,12 +74,14 @@
 						{bp.repo_url}
 					</p>
 					<a
-						href="/app/{bp.name}"
+						href={getProjectUrl(bp.name)}
 						target="_blank"
+						rel="noreferrer"
 						class="text-xs text-emerald-400 hover:underline font-mono inline-flex items-center gap-1 mt-1"
 					>
-						Hosted URL: /app/{bp.name} ↗
+						Visit Live FQDN ↗
 					</a>
+
 				</div>
 
 				<div class="pt-4 border-t border-neutral-800/80 flex items-center justify-between gap-3">

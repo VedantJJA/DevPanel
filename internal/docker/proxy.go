@@ -92,7 +92,7 @@ func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName 
 					break
 				}
 			}
-			if !matched && (strings.HasSuffix(cleanName, "-"+sName) || cleanName == sName) {
+			if !matched && (strings.HasSuffix(cleanName, "-"+sName) || cleanName == sName || strings.HasPrefix(cleanName, "devpnl-"+cleanID+"-") || strings.HasPrefix(cleanName, "devpnl-"+strings.ToLower(bpID)+"-")) {
 				matched = true
 			}
 			if matched {
@@ -111,6 +111,7 @@ func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName 
 					}
 				}
 			}
+
 		}
 	}
 	return 0
@@ -331,9 +332,32 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		containers, _ := dockClient.ListContainers(r.Context())
 		containerPort := findContainerPort(containers, bp.ID, bp.Name, targetSvc.Name, targetPort)
 
-		if containerPort == 0 {
-			containerPort = targetPort
+		if containerPort == 0 || containerPort == 80 || containerPort == 8090 {
+			w.WriteHeader(http.StatusBadGateway)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprintf(w, `<!DOCTYPE html>
+				<head>
+					<title>%s — Service Offline</title>
+					<meta charset="utf-8">
+					<style>
+						body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+						.card { background: #1e293b; border: 1px solid #334155; padding: 2.5rem; border-radius: 1rem; max-width: 500px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
+						.badge { display: inline-block; background: #ef4444; color: white; font-weight: bold; font-size: 0.75rem; padding: 0.25rem 0.75rem; border-radius: 9999px; text-transform: uppercase; margin-bottom: 1rem; }
+						h1 { margin: 0 0 0.5rem 0; font-size: 1.5rem; }
+						p { color: #94a3b8; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem; }
+					</style>
+				</head>
+				<body>
+					<div class="card">
+						<div class="badge">Container Host Port Unavailable</div>
+						<h1>%s / %s</h1>
+						<p>Service container is starting up or has no public host port assigned.</p>
+					</div>
+				</body>
+			</html>`, targetSvc.Name, targetSvc.Name, projectName)
+			return
 		}
+
 
 		upstreamAddr := fmt.Sprintf("http://127.0.0.1:%d", containerPort)
 		targetURL, err := url.Parse(upstreamAddr)

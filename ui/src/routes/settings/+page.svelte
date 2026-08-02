@@ -24,12 +24,8 @@
 		return h === 'localhost' || h === '127.0.0.1' || /^192\.168\./.test(h) || /^10\./.test(h);
 	}
 	let previewScheme = $derived(isLocalDomain(baseDomain) ? 'http' : 'https');
-	let previewProjectUrl = $derived(
-		routingMode === 'subdomain'
-			? `${previewScheme}://my-project.${baseDomain}/`
-			: `${previewScheme}://${baseDomain}/app/my-project/`
-	);
-	let isLocalhostWarning = $derived(routingMode === 'subdomain' && isLocalDomain(baseDomain));
+	let previewProjectUrl = $derived(`${previewScheme}://my-project.${baseDomain}/`);
+
 
 	async function fetchSettings() {
 		try {
