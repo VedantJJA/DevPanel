@@ -63,30 +63,34 @@ export function getProjectUrl(projectName: string, config?: RoutingConfig): stri
 
 /**
  * Returns the absolute public URL for a specific service within a project.
+ * Uses the service's unique slug (Render-style) for the URL path/subdomain.
  */
 export function getServiceUrl(
 	projectName: string,
 	serviceName: string,
-	config?: RoutingConfig
+	config?: RoutingConfig,
+	serviceSlug?: string
 ): string {
 	const cfg = config ?? get(routingConfig);
 	const runtimeCfg = getConfig();
 	const mode = cfg?.mode || runtimeCfg.routingMode;
 	const rootDomain = cfg?.baseDomain || runtimeCfg.rootDomain;
 
-	const targetName = serviceName && serviceName !== projectName ? serviceName : projectName;
+	// Prefer slug over service name for URL generation (Render-style)
+	const urlIdentifier = serviceSlug || serviceName || projectName;
+
 	if (mode === 'subdomain') {
 		return buildUrl({
 			routingMode: 'subdomain',
 			rootDomain: rootDomain,
-			projectName: targetName,
+			projectName: urlIdentifier,
 			path: '/'
 		});
 	}
 	return buildUrl({
 		routingMode: 'path',
 		rootDomain: rootDomain,
-		projectName: targetName,
+		projectName: urlIdentifier,
 		path: '/'
 	});
 }

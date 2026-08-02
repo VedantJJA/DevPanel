@@ -95,64 +95,40 @@ func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName 
 	return 0
 }
 
-// HandleProjectReverseProxy handles routing for /app/{project}/{service}/ and subdomain routing (*.domain.com, *.nip.io)
+// HandleProjectReverseProxy handles routing for /app/{slug}/ and subdomain routing ({slug}.domain.com).
+// It resolves the target service by slug (Render-style), and automatically reroutes /api/* requests
+// from a static/frontend service to the project's web/backend service container.
 func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Parse project and service names from either URL Path or Subdomain Host header
+		// Parse service slug from either URL Path or Subdomain Host header
 		host := strings.Split(r.Host, ":")[0]
 		subParts := strings.Split(host, ".")
 
-		projectName := ""
+		resolvedSlug := ""
 		serviceName := ""
+		projectName := ""
 
-		// 1. Try URL Path /app/{project}/{service}/
+		// 1. Try URL Path /app/{slug}/...
 		if strings.HasPrefix(r.URL.Path, "/app/") {
 			p := strings.TrimPrefix(r.URL.Path, "/app/")
 			parts := strings.Split(strings.Trim(p, "/"), "/")
 			if len(parts) > 0 && parts[0] != "" {
-				projectName = parts[0]
-				if len(parts) >= 2 {
-					serviceName = parts[1]
-				}
+				resolvedSlug = parts[0]
 			}
 		}
 
-		// 2. Try Subdomain / Domain Resolution if path /app/ was not used
-		if projectName == "" && len(subParts) >= 2 {
+		// 2. Try Subdomain resolution: {slug}.domain.com or {slug}.nip.io
+		if resolvedSlug == "" && len(subParts) >= 2 {
 			first := strings.ToLower(subParts[0])
 			if first != "localhost" && first != "127" && first != "www" && first != "devpanel" && first != "panel" {
-				// Pattern A: Check if first subdomain matches a project (e.g. vtopcc.nip.io or vtopcc.domain.com)
-				bpCheck, err := database.GetBlueprint(r.Context(), first)
-				if err == nil && bpCheck != nil {
-					projectName = bpCheck.ID
-				} else if len(subParts) >= 3 {
-					// Pattern B: Check if second subdomain matches a project (e.g. vtopcc-backend.vtopcc.nip.io)
-					second := strings.ToLower(subParts[1])
-					bpCheck2, err2 := database.GetBlueprint(r.Context(), second)
-					if err2 == nil && bpCheck2 != nil {
-						projectName = bpCheck2.ID
-						serviceName = first
-					}
-				}
-
-				// Pattern C: Check if full Host or first subdomain matches a service or custom domain
-				if projectName == "" {
-					svcCheck, _ := database.FindServiceByName(r.Context(), host)
-					if svcCheck == nil {
-						svcCheck, _ = database.FindServiceByName(r.Context(), first)
-					}
-					if svcCheck != nil {
-						projectName = svcCheck.ProjectID
-						serviceName = svcCheck.Name
-					}
-				}
+				resolvedSlug = first
 			}
 		}
 
-		// Fallback: project injected by rootRouter via referer/cookie dispatch.
-		if projectName == "" {
+		// 3. Fallback: project/slug injected by rootRouter via referer/cookie dispatch
+		if resolvedSlug == "" {
 			if injected := r.Header.Get(XDevPanelProject); injected != "" {
-				projectName = injected
+				resolvedSlug = injected
 			}
 		}
 		currentRoutingMode := r.Header.Get(XDevPanelRoutingMode)
@@ -160,89 +136,140 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		r.Header.Del(XDevPanelProject)
 		r.Header.Del(XDevPanelRoutingMode)
 
-		if projectName != "" {
+		if resolvedSlug == "" {
+			http.Error(w, "Project or service not found for host/path", http.StatusBadRequest)
+			return
+		}
+
+		// --- Resolve service by slug (Render-style) ---
+		// First try: exact slug match on the services table
+		svcBySlug, _ := database.FindServiceBySlug(r.Context(), resolvedSlug)
+
+		var bp *db.BlueprintRecord
+		var svcs []db.ServiceRecord
+		var targetSvc *db.ServiceRecord
+
+		if svcBySlug != nil {
+			// Slug matched a specific service
+			projectName = svcBySlug.ProjectID
+			serviceName = svcBySlug.Name
+
+			var err error
+			bp, err = database.GetBlueprint(r.Context(), projectName)
+			if err != nil || bp == nil {
+				http.Error(w, fmt.Sprintf("Project not found for service slug %q", resolvedSlug), http.StatusNotFound)
+				return
+			}
+			svcs, _ = database.ListServices(r.Context(), bp.ID)
+			targetSvc = svcBySlug
+		} else {
+			// Fallback: try resolving as project name/ID (backward compat)
+			var err error
+			bp, err = database.GetBlueprint(r.Context(), resolvedSlug)
+			if err != nil || bp == nil {
+				// Also check by service name (legacy lookup)
+				if svcCheck, _ := database.FindServiceByName(r.Context(), resolvedSlug); svcCheck != nil {
+					projectName = svcCheck.ProjectID
+					serviceName = svcCheck.Name
+					bp, err = database.GetBlueprint(r.Context(), projectName)
+					if err != nil || bp == nil {
+						http.Error(w, fmt.Sprintf("Project or service %q not found", resolvedSlug), http.StatusNotFound)
+						return
+					}
+				} else {
+					http.Error(w, fmt.Sprintf("Project or service %q not found", resolvedSlug), http.StatusNotFound)
+					return
+				}
+			} else {
+				projectName = bp.ID
+			}
+
+			svcs, _ = database.ListServices(r.Context(), bp.ID)
+			if len(svcs) == 0 {
+				http.Error(w, fmt.Sprintf("No active services for project %q", projectName), http.StatusNotFound)
+				return
+			}
+
+			// Try matching service name from path or legacy
+			if serviceName != "" {
+				for i := range svcs {
+					if strings.EqualFold(svcs[i].Name, serviceName) || strings.EqualFold(svcs[i].Slug, serviceName) {
+						targetSvc = &svcs[i]
+						break
+					}
+				}
+			}
+
+			// Default to static (frontend) first, then web
+			if targetSvc == nil {
+				for i := range svcs {
+					if svcs[i].Type == "static" {
+						targetSvc = &svcs[i]
+						break
+					}
+				}
+			}
+			if targetSvc == nil {
+				for i := range svcs {
+					if svcs[i].Type == "web" {
+						targetSvc = &svcs[i]
+						break
+					}
+				}
+			}
+			if targetSvc == nil {
+				targetSvc = &svcs[0]
+			}
+		}
+
+		// Set cookie for referer-based routing fallback
+		if resolvedSlug != "" {
 			http.SetCookie(w, &http.Cookie{
 				Name:     "devpanel_project",
-				Value:    projectName,
+				Value:    resolvedSlug,
 				Path:     "/",
 				SameSite: http.SameSiteLaxMode,
 			})
 		}
 
-		if projectName == "" {
-			http.Error(w, "Project or service not found for host/path", http.StatusBadRequest)
-			return
-		}
-
-		// Find blueprint / services for project
-		bp, err := database.GetBlueprint(r.Context(), projectName)
-		if err != nil || bp == nil {
-			if svcCheck, _ := database.FindServiceByName(r.Context(), projectName); svcCheck != nil {
-				serviceName = svcCheck.Name
-				projectName = svcCheck.ProjectID
-				bp, err = database.GetBlueprint(r.Context(), projectName)
+		// --- Frontend→Backend API reroute ---
+		// If the target service is a "static" (frontend) type, and the request path
+		// is an API call (/api/*), automatically reroute to the project's "web" (backend) service.
+		isApiReq := false
+		requestPath := r.URL.Path
+		if strings.HasPrefix(requestPath, "/app/") {
+			// Strip /app/{slug}/ prefix to get the relative path
+			stripped := strings.TrimPrefix(requestPath, "/app/")
+			parts := strings.SplitN(stripped, "/", 2)
+			if len(parts) == 2 {
+				requestPath = "/" + parts[1]
+			} else {
+				requestPath = "/"
 			}
 		}
-		if err != nil || bp == nil {
-			http.Error(w, fmt.Sprintf("Project or service %q not found", projectName), http.StatusNotFound)
-			return
-		}
+		isApiReq = strings.HasPrefix(requestPath, "/api/") || requestPath == "/api"
 
-		svcs, err := database.ListServices(r.Context(), bp.ID)
-		if err != nil || len(svcs) == 0 {
-			http.Error(w, fmt.Sprintf("No active services for project %q", projectName), http.StatusNotFound)
-			return
-		}
-
-		var targetSvc *db.ServiceRecord
-		if serviceName != "" {
-			for i := range svcs {
-				if strings.EqualFold(svcs[i].Name, serviceName) {
-					targetSvc = &svcs[i]
-					break
-				}
-			}
-			// If serviceName was extracted from path (e.g. /app/project/api/...) but does not match
-			// any actual service name in the project, clear serviceName so it isn't treated as a sub-service.
-			if targetSvc == nil {
-				serviceName = ""
-			}
-		}
-
-		// Intelligent routing fallback when serviceName is omitted or un-matched:
-		// If request path is an API call (/api/*, /app/<project>/api/*, etc.), route to "web" service (backend API)!
-		isApiReq := strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" ||
-			strings.Contains(r.URL.Path, "/api/") ||
-			strings.HasPrefix(r.URL.Path, fmt.Sprintf("/app/%s/api", projectName))
-
-		if targetSvc == nil && isApiReq {
+		if targetSvc != nil && targetSvc.Type == "static" && isApiReq {
+			// Find the web/backend service in the same project
 			for i := range svcs {
 				if svcs[i].Type == "web" {
 					targetSvc = &svcs[i]
+					serviceName = svcs[i].Name
 					break
 				}
 			}
 		}
 
-		// Default to static (frontend) service first, then web service
-		if targetSvc == nil {
-			for i := range svcs {
-				if svcs[i].Type == "static" {
-					targetSvc = &svcs[i]
-					break
-				}
-			}
-		}
-		if targetSvc == nil {
+		// Even if we didn't match via slug initially and matched via old project lookup,
+		// check for /api/* rerouting on any non-backend service
+		if targetSvc != nil && targetSvc.Type != "web" && isApiReq {
 			for i := range svcs {
 				if svcs[i].Type == "web" {
 					targetSvc = &svcs[i]
+					serviceName = svcs[i].Name
 					break
 				}
 			}
-		}
-		if targetSvc == nil {
-			targetSvc = &svcs[0]
 		}
 
 		targetPort := targetSvc.Port
@@ -276,7 +303,10 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			},
 		}
 
-		// Dynamically rewrite HTML base and asset URLs to support subpath hosting (/app/<project>/)
+		// Use the resolved slug for subpath-based HTML rewriting
+		proxySlug := resolvedSlug
+
+		// Dynamically rewrite HTML base and asset URLs to support subpath hosting (/app/{slug}/)
 		proxy.ModifyResponse = func(resp *http.Response) error {
 			if currentRoutingMode == "subdomain" {
 				return nil
@@ -291,10 +321,7 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 
 				htmlStr := string(bodyBytes)
 
-				subpath := fmt.Sprintf("/app/%s/", projectName)
-				if serviceName != "" {
-					subpath = fmt.Sprintf("/app/%s/%s/", projectName, serviceName)
-				}
+				subpath := fmt.Sprintf("/app/%s/", proxySlug)
 
 				if !strings.Contains(htmlStr, "<base ") && !strings.Contains(htmlStr, "<BASE ") {
 					baseTag := fmt.Sprintf(`<head><base href="%s">`, subpath)
@@ -338,46 +365,37 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			} else {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-	<title>%s — DevPanel App Unavailable</title>
-	<meta charset="utf-8">
-	<style>
-		body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-		.card { background: #1e293b; border: 1px solid #334155; padding: 2.5rem; border-radius: 1rem; max-width: 500px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
-		.badge { display: inline-block; background: #ef4444; color: white; font-weight: bold; font-size: 0.75rem; padding: 0.25rem 0.75rem; border-radius: 9999px; text-transform: uppercase; margin-bottom: 1rem; }
-		h1 { margin: 0 0 0.5rem 0; font-size: 1.5rem; }
-		p { color: #94a3b8; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem; }
-		.code { background: #0f172a; border: 1px solid #334155; padding: 0.75rem; border-radius: 0.5rem; font-family: monospace; font-size: 0.85rem; color: #f87171; word-break: break-all; }
-	</style>
-</head>
-<body>
-	<div class="card">
-		<div class="badge">Service Offline</div>
-		<h1>%s / %s</h1>
-		<p>Service container is starting up or temporarily unreachable on host port %d.</p>
-		<div class="code">%v</div>
-	</div>
-</body>
-</html>`, targetSvc.Name, projectName, targetSvc.Name, containerPort, err)
+					<head>
+						<title>%s — DevPanel App Unavailable</title>
+						<meta charset="utf-8">
+						<style>
+							body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+							.card { background: #1e293b; border: 1px solid #334155; padding: 2.5rem; border-radius: 1rem; max-width: 500px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
+							.badge { display: inline-block; background: #ef4444; color: white; font-weight: bold; font-size: 0.75rem; padding: 0.25rem 0.75rem; border-radius: 9999px; text-transform: uppercase; margin-bottom: 1rem; }
+							h1 { margin: 0 0 0.5rem 0; font-size: 1.5rem; }
+							p { color: #94a3b8; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem; }
+							.code { background: #0f172a; border: 1px solid #334155; padding: 0.75rem; border-radius: 0.5rem; font-family: monospace; font-size: 0.85rem; color: #f87171; word-break: break-all; }
+						</style>
+					</head>
+					<body>
+						<div class="card">
+							<div class="badge">Service Offline</div>
+							<h1>%s / %s</h1>
+							<p>Service container is starting up or temporarily unreachable on host port %d.</p>
+							<div class="code">%v</div>
+						</div>
+					</body>
+				</html>`, targetSvc.Name, projectName, targetSvc.Name, containerPort, err)
 			}
 		}
 
-		// Strip /app/{project}/{service} or /app/{project} prefix from request path if present
+		// Strip /app/{slug} prefix from request path if present, so upstream sees relative paths
 		if strings.HasPrefix(r.URL.Path, "/app/") {
-			var relPath string
-			if serviceName != "" {
-				prefixWithSvc := fmt.Sprintf("/app/%s/%s", projectName, serviceName)
-				if strings.HasPrefix(r.URL.Path, prefixWithSvc) {
-					relPath = strings.TrimPrefix(r.URL.Path, prefixWithSvc)
-				}
-			}
-			if relPath == "" {
-				prefixBase := fmt.Sprintf("/app/%s", projectName)
-				relPath = strings.TrimPrefix(r.URL.Path, prefixBase)
-			}
-			if relPath == "" || !strings.HasPrefix(relPath, "/") {
-				relPath = "/" + relPath
+			stripped := strings.TrimPrefix(r.URL.Path, "/app/")
+			parts := strings.SplitN(stripped, "/", 2)
+			relPath := "/"
+			if len(parts) == 2 {
+				relPath = "/" + parts[1]
 			}
 			r.URL.Path = relPath
 		}
@@ -385,3 +403,4 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		proxy.ServeHTTP(w, r)
 	}
 }
+

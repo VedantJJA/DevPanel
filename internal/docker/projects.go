@@ -67,6 +67,42 @@ func orDefault(val, fallback string) string {
 	return fallback
 }
 
+// generateUniqueSlug creates a Render-style unique URL slug for a service.
+// It tries the sanitized baseName first; if already taken, appends -xxxx
+// (4 random alphanumeric characters) and retries up to 5 times.
+func generateUniqueSlug(ctx context.Context, database *db.DB, baseName string) string {
+	slug := sanitizeName(baseName)
+	if slug == "" {
+		slug = "svc"
+	}
+
+	exists, err := database.SlugExists(ctx, slug)
+	if err == nil && !exists {
+		return slug
+	}
+
+	// Slug is taken — append random suffix
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	for attempt := 0; attempt < 5; attempt++ {
+		b := make([]byte, 4)
+		_, _ = rand.Read(b)
+		suffix := make([]byte, 4)
+		for i := range b {
+			suffix[i] = charset[int(b[i])%len(charset)]
+		}
+		candidate := fmt.Sprintf("%s-%s", slug, string(suffix))
+		exists, err := database.SlugExists(ctx, candidate)
+		if err == nil && !exists {
+			return candidate
+		}
+	}
+
+	// Extremely unlikely fallback: use full hex
+	fb := make([]byte, 4)
+	_, _ = rand.Read(fb)
+	return fmt.Sprintf("%s-%s", slug, hex.EncodeToString(fb))
+}
+
 // HandleCreateProject — POST /api/projects
 func HandleCreateProject(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -113,10 +149,11 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 			log.Printf("api: create project blueprint: %v", err)
 		}
 
-		// Persist per-service settings
+		// Persist per-service settings with Render-style unique URL slugs
 		for _, s := range req.Services {
+			slug := generateUniqueSlug(r.Context(), database, s.Name)
 			rec := &db.ServiceRecord{
-				ProjectID: projectID, Name: s.Name, Type: s.Type, Image: s.Image,
+				ProjectID: projectID, Name: s.Name, Slug: slug, Type: s.Type, Image: s.Image,
 				EnvVars: s.EnvVars, Port: s.Port, CustomDomain: s.CustomDomain,
 				AutoDeploy: s.AutoDeploy, BuildCommand: s.BuildCommand,
 				StartCommand: s.StartCommand, InstanceType: orDefault(s.InstanceType, "free"),

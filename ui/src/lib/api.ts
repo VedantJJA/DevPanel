@@ -18,13 +18,18 @@ export function getApiUrl(path: string): string {
 
 /**
  * Resolves the dynamic backend API base URL for a hosted project service.
- * - Path mode: https://<domain>/app/<project>/<service>/
- * - Subdomain mode: https://<service>.<project>.<domain>/
+ * Uses the service's unique slug (Render-style) for routing.
+ * - Path mode: https://<domain>/app/<slug>/
+ * - Subdomain mode: https://<slug>.<domain>/
+ *
+ * When calling a backend API from a frontend service, pass the backend service's slug
+ * so requests route to the correct container.
  */
 export function getProjectServiceApiUrl(
 	projectName: string,
 	serviceName?: string,
-	path: string = ''
+	path: string = '',
+	serviceSlug?: string
 ): string {
 	const cfg = get(routingConfig);
 	const domain =
@@ -32,15 +37,16 @@ export function getProjectServiceApiUrl(
 	const scheme = schemeFor(domain);
 	const cleanPath = path ? (path.startsWith('/') ? path : '/' + path) : '';
 
+	// Use slug for URL construction (Render-style)
+	const urlIdentifier = serviceSlug || serviceName || projectName;
+
 	if (cfg.mode === 'subdomain') {
 		const hostWithoutPort = domain.split(':')[0];
 		const portSuffix = domain.includes(':') ? ':' + domain.split(':')[1] : '';
-		const svcPrefix = serviceName ? `${serviceName}.${projectName}` : projectName;
-		return `${scheme}://${svcPrefix}.${hostWithoutPort}${portSuffix}${cleanPath}`;
+		return `${scheme}://${urlIdentifier}.${hostWithoutPort}${portSuffix}${cleanPath}`;
 	}
 
-	const svcPath = serviceName ? `/${encodeURIComponent(serviceName)}` : '';
-	return `${scheme}://${domain}/app/${encodeURIComponent(projectName)}${svcPath}${cleanPath}`;
+	return `${scheme}://${domain}/app/${encodeURIComponent(urlIdentifier)}${cleanPath}`;
 }
 
 export async function scanRepo(repoUrl: string, appName: string): Promise<ScanResult> {

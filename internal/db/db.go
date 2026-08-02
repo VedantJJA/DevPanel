@@ -84,6 +84,11 @@ func (d *DB) migrate() error {
 	// Dynamic schema updates
 	_, _ = d.conn.Exec(`ALTER TABLE services ADD COLUMN image TEXT NOT NULL DEFAULT ''`)
 	_, _ = d.conn.Exec(`ALTER TABLE services ADD COLUMN runtime TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.conn.Exec(`ALTER TABLE services ADD COLUMN slug TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_services_slug_unique ON services(slug) WHERE slug != ''`)
+
+	// Backfill: assign slug = name for any existing service rows that lack one.
+	_, _ = d.conn.Exec(`UPDATE services SET slug = name WHERE slug = ''`)
 
 	log.Println("db: migrations complete")
 	return nil

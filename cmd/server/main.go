@@ -273,6 +273,7 @@ func main() {
 
 	// Subdomain & Referer-aware root HTTP router.
 	// Routing behaviour depends on the "routing_mode" setting (path | subdomain).
+	// URLs now use per-service slugs (Render-style) instead of project names.
 	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		routingMode, baseDomain := getRoutingMode(r.Context(), database, r)
 
@@ -288,12 +289,12 @@ func main() {
 
 		// ── SUBDOMAIN ROUTING MODE ────────────────────────────────────────────
 		if routingMode == "subdomain" {
-			// Redirect /app/<project>[/...] → http(s)://<project>.<baseDomain>[/...]
+			// Redirect /app/<slug>[/...] → http(s)://<slug>.<baseDomain>[/...]
 			if strings.HasPrefix(r.URL.Path, "/app/") {
 				rest := strings.TrimPrefix(r.URL.Path, "/app/")
 				parts := strings.SplitN(rest, "/", 2)
 				if len(parts) > 0 && parts[0] != "" {
-					projectPart := parts[0]
+					slug := parts[0]
 					tail := ""
 					if len(parts) == 2 {
 						tail = "/" + parts[1]
@@ -306,13 +307,13 @@ func main() {
 					if idx := strings.Index(baseDomain, ":"); idx >= 0 {
 						portSuffix = baseDomain[idx:]
 					}
-					http.Redirect(w, r, fmt.Sprintf("%s://%s.%s%s%s", scheme, projectPart, baseDomainHost, portSuffix, tail), http.StatusFound)
+					http.Redirect(w, r, fmt.Sprintf("%s://%s.%s%s%s", scheme, slug, baseDomainHost, portSuffix, tail), http.StatusFound)
 					return
 				}
 			}
 
-			// Route ALL requests on a project subdomain directly to that project container.
-			// This includes /api/*, /ws/*, / etc. — no admin API intercept.
+			// Route ALL requests on a service subdomain directly to the proxy handler.
+			// The proxy handler resolves <slug>.domain.com → service by slug lookup.
 			if isProjectSubdomain {
 				r2 := r.Clone(r.Context())
 				r2.Header.Set(docker.XDevPanelRoutingMode, "subdomain")
@@ -327,9 +328,9 @@ func main() {
 
 		// ── PATH ROUTING MODE (default) ───────────────────────────────────────
 
-		// 1. Explicit /app/<project>/... path → project reverse proxy.
+		// 1. Explicit /app/<slug>/... path → proxy handler resolves service by slug.
 		if strings.HasPrefix(r.URL.Path, "/app/") {
-			// If requested via panel.<domain> in path mode, redirect to <domain>/app/<project>
+			// If requested via panel.<domain> in path mode, redirect to <domain>/app/<slug>
 			if strings.HasPrefix(hostWithoutPort, "panel.") {
 				scheme := "https"
 				if strings.Contains(baseDomain, "localhost") || strings.Contains(baseDomain, "127.0.0.1") {
@@ -348,28 +349,30 @@ func main() {
 			return
 		}
 
-		// 2. Referer & Cookie fallback: /app/<project>/-hosted SPA making absolute /api/* calls.
-		//    Extract project name from Referer or devpanel_project Cookie, inject via header.
+		// 2. Referer & Cookie fallback: /app/<slug>/-hosted SPA making absolute /api/* calls.
+		//    Extract slug from Referer or devpanel_project Cookie, inject via header.
+		//    The proxy handler's frontend→backend API reroute logic will
+		//    automatically forward /api/* requests to the project's backend service.
 		if strings.HasPrefix(r.URL.Path, "/api/") && !isDevPanelAdminRoute(r.URL.Path) {
-			projectName := ""
+			serviceSlug := ""
 
 			referer := r.Header.Get("Referer")
 			if idx := strings.Index(referer, "/app/"); idx >= 0 {
 				rest := referer[idx+5:] // after "/app/"
-				projectName = strings.SplitN(rest, "/", 2)[0]
+				serviceSlug = strings.SplitN(rest, "/", 2)[0]
 			}
 
-			if projectName == "" {
+			if serviceSlug == "" {
 				if cookie, err := r.Cookie("devpanel_project"); err == nil && cookie.Value != "" {
-					projectName = cookie.Value
+					serviceSlug = cookie.Value
 				}
 			}
 
-			if projectName != "" {
-				// Inject project name so HandleProjectReverseProxy can identify the target
-				// without the path needing to start with /app/<project>.
+			if serviceSlug != "" {
+				// Inject slug so HandleProjectReverseProxy can identify the target service.
+				// The proxy handler will automatically reroute /api/* to the backend container.
 				r2 := r.Clone(r.Context())
-				r2.Header.Set(docker.XDevPanelProject, projectName)
+				r2.Header.Set(docker.XDevPanelProject, serviceSlug)
 				r2.Header.Set(docker.XDevPanelRoutingMode, "path")
 				projectProxyHandler.ServeHTTP(w, r2)
 				return
@@ -379,6 +382,7 @@ func main() {
 		// 3. Default: DevPanel Admin API / Web UI static multiplexer.
 		mux.ServeHTTP(w, r)
 	})
+
 
 	// Wrap root multiplexer with request tracking middleware
 	handler := tracker.Middleware(rootRouter)

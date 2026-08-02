@@ -49,6 +49,7 @@ export interface ServiceRecord {
 	id?: number;
 	project_id: string;
 	name: string;
+	slug: string;
 	type: 'web' | 'static' | 'database' | 'worker' | 'postgres' | string;
 	env_vars: Record<string, string>;
 	port: number;
