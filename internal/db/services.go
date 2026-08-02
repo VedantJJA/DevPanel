@@ -164,19 +164,22 @@ func (d *DB) FindServiceByName(ctx context.Context, nameOrDomain string) (*Servi
 	return &s, nil
 }
 
-// FindServiceBySlug returns a service record by its unique URL slug.
+// FindServiceBySlug returns a service record by its unique URL slug, project_id, or service name.
 func (d *DB) FindServiceBySlug(ctx context.Context, slug string) (*ServiceRecord, error) {
 	ctx = contextOrBg(ctx)
 	var s ServiceRecord
 	var envJSON string
 	var ad int
+	bpID := "bp-" + strings.TrimPrefix(slug, "bp-")
 	q := `
 	SELECT id, project_id, name, slug, fqdn, type, image, env_json, port, custom_domain,
 	       auto_deploy, build_command, start_command, instance_type, runtime, created_at, updated_at
-	FROM services WHERE slug = ? LIMIT 1`
-	err := d.conn.QueryRowContext(ctx, q, slug).Scan(
+	FROM services WHERE slug = ? OR project_id = ? OR project_id = ? OR name = ? 
+	ORDER BY CASE WHEN type = 'static' THEN 0 ELSE 1 END LIMIT 1`
+	err := d.conn.QueryRowContext(ctx, q, slug, slug, bpID, slug).Scan(
 		&s.ID, &s.ProjectID, &s.Name, &s.Slug, &s.FQDN, &s.Type, &s.Image, &envJSON, &s.Port, &s.CustomDomain,
 		&ad, &s.BuildCommand, &s.StartCommand, &s.InstanceType, &s.Runtime, &s.CreatedAt, &s.UpdatedAt)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

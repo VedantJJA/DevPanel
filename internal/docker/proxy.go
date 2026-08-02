@@ -247,15 +247,28 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		if targetSvc == nil && resolvedSlug != "" {
 			var err error
 			bp, err = database.GetBlueprint(r.Context(), resolvedSlug)
+			if bp == nil {
+				bp, err = database.GetBlueprint(r.Context(), "bp-"+resolvedSlug)
+			}
 			if err == nil && bp != nil {
 				projectName = bp.ID
 				svcs, _ = database.ListServices(r.Context(), bp.ID)
 				if len(svcs) > 0 {
-					targetSvc = &svcs[0]
+					// Prefer static (frontend) service first, then web
+					for i := range svcs {
+						if svcs[i].Type == "static" {
+							targetSvc = &svcs[i]
+							break
+						}
+					}
+					if targetSvc == nil {
+						targetSvc = &svcs[0]
+					}
 					serviceName = targetSvc.Name
 				}
 			}
 		}
+
 
 		if targetSvc == nil {
 			http.Error(w, "Project or service not found for host/path", http.StatusBadRequest)
