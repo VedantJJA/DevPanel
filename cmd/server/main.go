@@ -12,7 +12,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -23,6 +22,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
 
 	"github.com/VedantJJA/devpnl/internal/caddy"
 	"github.com/VedantJJA/devpnl/internal/db"
@@ -272,14 +272,13 @@ func main() {
 	// Project Reverse Proxy Handler
 	projectProxyHandler := docker.HandleProjectReverseProxy(database, dockClient)
 
-	// Subdomain & Referer-aware root HTTP router.
-	// Routing behaviour depends on the "routing_mode" setting (path | subdomain).
-	// URLs now use per-service slugs (Render-style) instead of project names.
+	// Coolify-style Unified HTTP Router.
+	// Supports subdomains (<slug>.domain.com), subpaths (/app/<slug>/), custom FQDNs,
+	// and API calls simultaneously without mode toggling.
 	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		routingMode, baseDomain := getRoutingMode(r.Context(), database, r)
-
 		host := r.Host
 		hostWithoutPort := strings.Split(host, ":")[0]
+		_, baseDomain := getRoutingMode(r.Context(), database, r)
 		baseDomainHost := strings.Split(baseDomain, ":")[0]
 		firstSub := strings.ToLower(strings.Split(hostWithoutPort, ".")[0])
 
@@ -288,73 +287,20 @@ func main() {
 			firstSub != "localhost" && firstSub != "127" &&
 			firstSub != "panel" && firstSub != "devpanel" && firstSub != "www"
 
-		// ── SUBDOMAIN ROUTING MODE ────────────────────────────────────────────
-		if routingMode == "subdomain" {
-			// Redirect /app/<slug>[/...] → http(s)://<slug>.<baseDomain>[/...]
-			if strings.HasPrefix(r.URL.Path, "/app/") {
-				rest := strings.TrimPrefix(r.URL.Path, "/app/")
-				parts := strings.SplitN(rest, "/", 2)
-				if len(parts) > 0 && parts[0] != "" {
-					slug := parts[0]
-					tail := ""
-					if len(parts) == 2 {
-						tail = "/" + parts[1]
-					}
-					scheme := "https"
-					if strings.Contains(baseDomain, "localhost") || strings.Contains(baseDomain, "127.0.0.1") {
-						scheme = "http"
-					}
-					portSuffix := ""
-					if idx := strings.Index(baseDomain, ":"); idx >= 0 {
-						portSuffix = baseDomain[idx:]
-					}
-					http.Redirect(w, r, fmt.Sprintf("%s://%s.%s%s%s", scheme, slug, baseDomainHost, portSuffix, tail), http.StatusFound)
-					return
-				}
-			}
-
-			// Route ALL requests on a service subdomain directly to the proxy handler.
-			// The proxy handler resolves <slug>.domain.com → service by slug lookup.
-			if isProjectSubdomain {
-				r2 := r.Clone(r.Context())
-				r2.Header.Set(docker.XDevPanelRoutingMode, "subdomain")
-				projectProxyHandler.ServeHTTP(w, r2)
-				return
-			}
-
-			// Fall through: serve DevPanel admin panel (panel.klouds.online itself)
-			mux.ServeHTTP(w, r)
-			return
-		}
-
-		// ── PATH ROUTING MODE (default) ───────────────────────────────────────
-
-		// 1. Explicit /app/<slug>/... path → proxy handler resolves service by slug.
+		// 1. Explicit /app/ subpath request -> Project Proxy
 		if strings.HasPrefix(r.URL.Path, "/app/") {
-			// If requested via panel.<domain> in path mode, redirect to <domain>/app/<slug>
-			if strings.HasPrefix(hostWithoutPort, "panel.") {
-				scheme := "https"
-				if strings.Contains(baseDomain, "localhost") || strings.Contains(baseDomain, "127.0.0.1") {
-					scheme = "http"
-				}
-				portSuffix := ""
-				if idx := strings.Index(baseDomain, ":"); idx >= 0 {
-					portSuffix = baseDomain[idx:]
-				}
-				http.Redirect(w, r, fmt.Sprintf("%s://%s%s%s", scheme, baseDomainHost, portSuffix, r.URL.RequestURI()), http.StatusFound)
-				return
-			}
-			r2 := r.Clone(r.Context())
-			r2.Header.Set(docker.XDevPanelRoutingMode, "path")
-			projectProxyHandler.ServeHTTP(w, r2)
+			projectProxyHandler.ServeHTTP(w, r)
 			return
 		}
 
-		// 2. Referer & Cookie fallback: /app/<slug>/-hosted SPA making absolute /api/* calls.
-		//    Extract slug from Referer or devpanel_project Cookie, inject via header.
-		//    The proxy handler's frontend→backend API reroute logic will
-		//    automatically forward /api/* requests to the project's backend service.
-		if strings.HasPrefix(r.URL.Path, "/api/") && !isDevPanelAdminRoute(r.URL.Path) {
+		// 2. Project Subdomain or Custom FQDN -> Project Proxy
+		if isProjectSubdomain {
+			projectProxyHandler.ServeHTTP(w, r)
+			return
+		}
+
+		// 3. Application API/Data calls (/api/* or /data/*) made by hosted SPAs
+		if !isDevPanelAdminRoute(r.URL.Path) && (strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/data/")) {
 			serviceSlug := ""
 
 			referer := r.Header.Get("Referer")
@@ -366,7 +312,6 @@ func main() {
 				serviceSlug = strings.SplitN(rest, "/", 2)[0]
 			}
 
-
 			if serviceSlug == "" {
 				if cookie, err := r.Cookie("devpanel_project"); err == nil && cookie.Value != "" {
 					serviceSlug = cookie.Value
@@ -374,19 +319,17 @@ func main() {
 			}
 
 			if serviceSlug != "" {
-				// Inject slug so HandleProjectReverseProxy can identify the target service.
-				// The proxy handler will automatically reroute /api/* to the backend container.
 				r2 := r.Clone(r.Context())
 				r2.Header.Set(docker.XDevPanelProject, serviceSlug)
-				r2.Header.Set(docker.XDevPanelRoutingMode, "path")
 				projectProxyHandler.ServeHTTP(w, r2)
 				return
 			}
 		}
 
-		// 3. Default: DevPanel Admin API / Web UI static multiplexer.
+		// 4. Default: DevPanel Admin Panel (Dashboard UI & Admin API)
 		mux.ServeHTTP(w, r)
 	})
+
 
 
 	// Wrap root multiplexer with request tracking middleware

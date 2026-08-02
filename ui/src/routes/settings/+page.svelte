@@ -170,12 +170,41 @@
 						</div>
 					</div>
 
-					<!-- Step 2: Routing Mode -->
+					<!-- Coolify-style Universal Routing Info -->
 					<div class="space-y-2">
 						<label id="routing-label" class="block text-sm font-semibold">
 							<span class="flex items-center gap-2">
 								<span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white" style="background-color: var(--primary)">2</span>
-								Routing URL Pattern
+								Universal Domain & Proxy Architecture (Coolify-Style)
+							</span>
+						</label>
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+							<div class="p-4 border border-emerald-500/30 rounded-xl text-left flex flex-col gap-1 bg-emerald-500/5">
+								<div class="flex items-center justify-between font-bold text-sm text-emerald-400">
+									<span>Subdomains & FQDNs</span>
+									<span class="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded font-bold uppercase border border-emerald-500/30">Active</span>
+								</div>
+								<code class="text-xs font-mono font-bold mt-1 text-emerald-300">http://&lt;slug&gt;.klouds.online</code>
+								<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Direct hostname routing per service. Assign custom domains or wildcards per service.</p>
+							</div>
+
+							<div class="p-4 border border-blue-500/30 rounded-xl text-left flex flex-col gap-1 bg-blue-500/5">
+								<div class="flex items-center justify-between font-bold text-sm text-blue-400">
+									<span>App Subpaths</span>
+									<span class="text-[10px] bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded font-bold uppercase border border-blue-500/30">Active</span>
+								</div>
+								<code class="text-xs font-mono font-bold mt-1 text-blue-300">http://klouds.online/app/&lt;slug&gt;/</code>
+								<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Universal path fallback. Works on any IP or domain with zero DNS setup.</p>
+							</div>
+						</div>
+					</div>
+
+					<!-- Step 2: Routing Mode -->
+					<div class="space-y-2">
+						<label id="routing-label" class="block text-sm font-semibold">
+							<span class="flex items-center gap-2">
+								<span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white" style="background-color: var(--primary)">3</span>
+								Active Routing Mode
 							</span>
 						</label>
 						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -190,7 +219,6 @@
 									{#if routingMode === 'path'}<span class="text-[10px] bg-primary text-white px-2 py-0.5 rounded font-bold uppercase">Active</span>{/if}
 								</div>
 								<code class="text-xs font-mono font-bold mt-1" style="color: var(--primary)">{previewScheme}://{baseDomain}/app/my-project/</code>
-								<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Works on any IP or domain with zero DNS changes. Best for single-domain setups.</p>
 							</button>
 
 							<button
@@ -204,7 +232,6 @@
 									{#if routingMode === 'subdomain'}<span class="text-[10px] bg-primary text-white px-2 py-0.5 rounded font-bold uppercase">Active</span>{/if}
 								</div>
 								<code class="text-xs font-mono font-bold mt-1" style="color: var(--primary)">{previewScheme}://my-project.{baseDomain}/</code>
-								<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Each project gets its own subdomain. Requires wildcard DNS record <code>*</code> → your server IP.</p>
 							</button>
 						</div>
 

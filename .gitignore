@@ -42,6 +42,7 @@ stitch_modern_cloud_platform_dashboard/
 stitch_modern_cloud_platform_dashboard(1)/
 cloud-render-studio/
 template.tsx
+coolify
 
 # Environment & Credentials
 .env
