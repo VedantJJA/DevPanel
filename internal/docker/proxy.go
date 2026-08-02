@@ -347,11 +347,25 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 
 		// Reverse proxy handler with retry transport for container boot resilience
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
+		originalDirector := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			originalDirector(req)
+			req.Header.Set("X-Forwarded-Host", r.Host)
+			if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+				req.Header.Set("X-Forwarded-Proto", "https")
+			} else {
+				req.Header.Set("X-Forwarded-Proto", "http")
+			}
+			req.Header.Set("X-Real-IP", strings.Split(r.RemoteAddr, ":")[0])
+			req.Host = r.Host // Preserve Host header for backend session/CORS
+		}
+
 		proxy.Transport = &retryTransport{
 			base: &http.Transport{
 				ResponseHeaderTimeout: 15 * time.Second,
 			},
 		}
+
 
 
 		proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
