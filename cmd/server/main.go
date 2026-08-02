@@ -16,7 +16,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -210,6 +209,7 @@ func main() {
 	apiMux.HandleFunc("DELETE /api/projects/{id}/logs", docker.HandleClearProjectLogs())
 	apiMux.HandleFunc("DELETE /api/projects/{id}", docker.HandleDeleteProject(database, dockClient))
 	apiMux.HandleFunc("/api/settings", docker.HandleSettings(database))
+	apiMux.HandleFunc("GET /api/debug/routes", docker.HandleGetRouteLogs())
 
 	// Mount protected API multiplexer under /api/
 	apiHandler := docker.AuthMiddleware(database, apiMux.ServeHTTP)
@@ -361,16 +361,6 @@ func main() {
 			if idx := strings.Index(referer, "/app/"); idx >= 0 {
 				rest := referer[idx+5:] // after "/app/"
 				serviceSlug = strings.SplitN(rest, "/", 2)[0]
-			} else if referer != "" {
-				if refURL, err := url.Parse(referer); err == nil && refURL.Host != "" {
-					refHost := strings.Split(refURL.Host, ":")[0]
-					if refHost != baseDomainHost && !strings.HasPrefix(refHost, "panel.") {
-						first := strings.ToLower(strings.Split(refHost, ".")[0])
-						if first != "localhost" && first != "127" && first != "www" && first != "devpanel" && first != "panel" {
-							serviceSlug = first
-						}
-					}
-				}
 			}
 
 			if serviceSlug == "" {
@@ -470,7 +460,9 @@ func isDevPanelAdminRoute(p string) bool {
 		"/api/metrics",
 		"/api/logs",
 		"/api/system",
+		"/api/debug/",
 	}
+
 	for _, prefix := range adminPrefixes {
 		if strings.HasPrefix(p, prefix) {
 			return true

@@ -1,14 +1,14 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import AppShell from '$lib/components/AppShell.svelte';
 	import type { SystemStats } from '$lib/types';
 
 	let systemStats = $state<SystemStats>({ totalContainers: 0, activeContainers: 0, stoppedContainers: 0, totalMemMb: 0, usedMemMb: 0, memPercent: 0, cpus: 1 });
 
-	// Caddy proxy routes — these would come from the API in a real impl
-	// For now wired to the proxy config API endpoint when available
 	let routes = $state<{ host: string; upstream: string; tls: string; status: string; requests: string }[]>([]);
+	let debugLogs = $state<any[]>([]);
 	let loading = $state(true);
+	let timer: any;
 
 	const caddyfile = `# DevPanel managed Caddyfile
 # Auto-generated from routing config
@@ -21,15 +21,27 @@
 		try {
 			const sRes = await fetch('/api/system/stats');
 			if (sRes.ok) { const s = await sRes.json(); systemStats = { ...systemStats, ...s }; }
-			// Try to fetch caddy routes if endpoint exists
+			
 			try {
 				const cRes = await fetch('/api/proxy/routes');
 				if (cRes.ok) { const d = await cRes.json(); routes = d.routes || []; }
 			} catch { routes = []; }
+
+			try {
+				const dbgRes = await fetch('/api/debug/routes');
+				if (dbgRes.ok) { const d = await dbgRes.json(); debugLogs = (d.routes || []).reverse(); }
+			} catch { debugLogs = []; }
 		} catch (e) { console.error(e); } finally { loading = false; }
 	}
 
-	onMount(fetchData);
+	onMount(() => {
+		fetchData();
+		timer = setInterval(fetchData, 3000);
+	});
+
+	onDestroy(() => {
+		if (timer) clearInterval(timer);
+	});
 </script>
 
 <AppShell {systemStats}>
@@ -37,15 +49,12 @@
 	<div class="mb-6">
 		<div class="flex flex-wrap items-end justify-between gap-4">
 			<div>
-				<h1 class="text-[28px] font-bold leading-tight lg:text-[32px]" style="color: var(--on-surface)">Caddy Reverse Proxy</h1>
-				<p class="mt-1" style="color: var(--on-surface-variant)">Every public hostname on this host, its upstream and TLS state.</p>
+				<h1 class="text-[28px] font-bold leading-tight lg:text-[32px]" style="color: var(--on-surface)">Caddy & Internal Reverse Proxy</h1>
+				<p class="mt-1" style="color: var(--on-surface-variant)">Live hostnames, upstream target containers, and real-time routing debugger.</p>
 			</div>
 			<div class="flex flex-wrap gap-2">
 				<button onclick={fetchData} class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium" style="border-color: var(--outline-variant); background-color: var(--surface-lowest)">
-					<span class="material-symbols-outlined" style="font-size: 20px">restart_alt</span>Reload config
-				</button>
-				<button class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold" style="background-color: var(--primary); color: var(--on-primary)">
-					<span class="material-symbols-outlined" style="font-size: 20px">add</span>Add route
+					<span class="material-symbols-outlined" style="font-size: 20px">restart_alt</span>Reload Config
 				</button>
 			</div>
 		</div>
@@ -54,77 +63,78 @@
 	<!-- Stat Cards -->
 	<div class="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
 		<div class="card-surface flex flex-col gap-1 p-5">
-			<span class="label-caps" style="color: var(--on-surface-variant)">Routes</span>
-			<span class="text-2xl font-bold" style="color: var(--primary)">{routes.length || '—'}</span>
+			<span class="label-caps" style="color: var(--on-surface-variant)">Active Routes</span>
+			<span class="text-2xl font-bold" style="color: var(--primary)">{debugLogs.length} logged</span>
 		</div>
 		<div class="card-surface flex flex-col gap-1 p-5">
 			<span class="label-caps" style="color: var(--on-surface-variant)">Certificates</span>
 			<span class="text-2xl font-bold" style="color: var(--success)">Auto-TLS</span>
 		</div>
 		<div class="card-surface flex flex-col gap-1 p-5">
-			<span class="label-caps" style="color: var(--on-surface-variant)">Requests (24h)</span>
-			<span class="text-2xl font-bold">—</span>
+			<span class="label-caps" style="color: var(--on-surface-variant)">API Rerouting</span>
+			<span class="text-2xl font-bold" style="color: var(--primary)">Active</span>
+			<span class="text-xs" style="color: var(--on-surface-variant)">Frontend → Backend</span>
 		</div>
 		<div class="card-surface flex flex-col gap-1 p-5">
-			<span class="label-caps" style="color: var(--on-surface-variant)">Proxy</span>
-			<span class="text-2xl font-bold">Caddy</span>
-			<span class="text-xs" style="color: var(--on-surface-variant)">Managed</span>
+			<span class="label-caps" style="color: var(--on-surface-variant)">Proxy Engine</span>
+			<span class="text-2xl font-bold">DevPanel Proxy</span>
+			<span class="text-xs" style="color: var(--on-surface-variant)">Render-style Slugs</span>
 		</div>
 	</div>
 
-	<!-- Routes Table -->
+	<!-- LIVE ROUTING DEBUG PANEL -->
 	<section class="card-surface mb-6 overflow-hidden">
-		{#if loading}
-			<div class="flex items-center justify-center py-12">
-				<span class="material-symbols-outlined animate-spin" style="color: var(--primary); font-size: 28px">refresh</span>
+		<div class="flex items-center justify-between border-b px-5 py-4" style="border-color: var(--outline-variant); background-color: var(--surface-low)">
+			<div class="flex items-center gap-2">
+				<span class="material-symbols-outlined text-blue-400" style="font-size: 24px">bug_report</span>
+				<h2 class="font-bold text-base" style="color: var(--on-surface)">Live Routing Debug Panel</h2>
 			</div>
-		{:else if routes.length === 0}
-			<div class="flex flex-col items-center py-12 text-center">
-				<span class="material-symbols-outlined mb-3" style="font-size: 40px; color: var(--outline)">router</span>
-				<p class="text-sm" style="color: var(--on-surface-variant)">No proxy routes configured yet.</p>
-				<p class="mt-1 text-xs" style="color: var(--on-surface-variant)">Routes are created automatically when you deploy a web service.</p>
+			<span class="rounded px-2.5 py-1 text-xs font-mono font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
+				Real-time Logs (Auto-refresh 3s)
+			</span>
+		</div>
+
+		{#if debugLogs.length === 0}
+			<div class="flex flex-col items-center py-10 text-center">
+				<span class="material-symbols-outlined mb-2" style="font-size: 36px; color: var(--outline)">alt_route</span>
+				<p class="text-sm" style="color: var(--on-surface-variant)">No request routes captured yet.</p>
+				<p class="mt-1 text-xs" style="color: var(--on-surface-variant)">Requests to hosted applications (/app/&lt;slug&gt;/ or subdomains) will appear here instantly.</p>
 			</div>
 		{:else}
 			<div class="overflow-x-auto">
-				<table class="w-full text-left">
+				<table class="w-full text-left font-mono text-xs">
 					<thead>
-						<tr class="border-b" style="border-color: var(--outline-variant); background-color: var(--surface-low)">
-							<th class="label-caps px-5 py-3" style="color: var(--on-surface-variant)">Hostname</th>
-							<th class="label-caps px-5 py-3" style="color: var(--on-surface-variant)">Upstream</th>
-							<th class="label-caps px-5 py-3" style="color: var(--on-surface-variant)">TLS</th>
-							<th class="label-caps px-5 py-3" style="color: var(--on-surface-variant)">Traffic</th>
-							<th class="label-caps px-5 py-3 text-right" style="color: var(--on-surface-variant)">Actions</th>
+						<tr class="border-b" style="border-color: var(--outline-variant); background-color: var(--surface-lowest)">
+							<th class="px-4 py-2.5" style="color: var(--on-surface-variant)">Time</th>
+							<th class="px-4 py-2.5" style="color: var(--on-surface-variant)">Method</th>
+							<th class="px-4 py-2.5" style="color: var(--on-surface-variant)">Requested Path</th>
+							<th class="px-4 py-2.5" style="color: var(--on-surface-variant)">Resolved Slug</th>
+							<th class="px-4 py-2.5" style="color: var(--on-surface-variant)">Target Service</th>
+							<th class="px-4 py-2.5" style="color: var(--on-surface-variant)">Type</th>
+							<th class="px-4 py-2.5" style="color: var(--on-surface-variant)">Upstream Target</th>
 						</tr>
 					</thead>
 					<tbody class="divide-y" style="border-color: var(--outline-variant)">
-						{#each routes as r}
-							<tr onmouseenter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--surface-low)'; }}
-								onmouseleave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = ''; }}>
-								<td class="px-5 py-4">
-									<span class="flex items-center gap-2 text-sm font-semibold">
-										<span class="material-symbols-outlined" style="font-size: 18px; color: {r.status === 'active' ? 'var(--success)' : 'var(--warning)'}">
-											{r.status === 'active' ? 'lock' : 'lock_open'}
-										</span>
-										{r.host}
+						{#each debugLogs as log}
+							<tr class="hover:bg-white/5 transition-colors">
+								<td class="px-4 py-2.5 text-gray-400 whitespace-nowrap">{log.timestamp ? log.timestamp.split('T')[1]?.replace('Z', '') : '—'}</td>
+								<td class="px-4 py-2.5 font-bold whitespace-nowrap">
+									<span class={log.method === 'GET' ? 'text-green-400' : 'text-blue-400'}>{log.method}</span>
+								</td>
+								<td class="px-4 py-2.5 text-gray-200 truncate max-w-[220px]" title={log.path}>{log.path}</td>
+								<td class="px-4 py-2.5 text-purple-300 font-semibold">{log.resolved_slug || '—'}</td>
+								<td class="px-4 py-2.5 font-semibold text-yellow-300">
+									{log.service_name}
+									{#if log.is_api_reroute}
+										<span class="ml-1.5 inline-block rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-400 border border-emerald-500/30">API Rerouted</span>
+									{/if}
+								</td>
+								<td class="px-4 py-2.5">
+									<span class="rounded px-1.5 py-0.5 text-[10px] uppercase font-bold" style="background-color: var(--surface-high); color: var(--on-surface-variant)">
+										{log.service_type || 'web'}
 									</span>
 								</td>
-								<td class="px-5 py-4 font-mono text-xs">{r.upstream}</td>
-								<td class="px-5 py-4 text-sm" style="color: var(--on-surface-variant)">{r.tls}</td>
-								<td class="px-5 py-4 text-sm" style="color: var(--on-surface-variant)">{r.requests}</td>
-								<td class="px-5 py-4">
-									<div class="flex justify-end gap-1">
-										<button class="rounded p-1.5 transition-colors" style="color: var(--on-surface-variant)"
-											onmouseenter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--surface-high)'; }}
-											onmouseleave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = ''; }}>
-											<span class="material-symbols-outlined" style="font-size: 20px">edit</span>
-										</button>
-										<button class="rounded p-1.5 transition-colors" style="color: var(--error)"
-											onmouseenter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--error-container)'; }}
-											onmouseleave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = ''; }}>
-											<span class="material-symbols-outlined" style="font-size: 20px">delete</span>
-										</button>
-									</div>
-								</td>
+								<td class="px-4 py-2.5 text-emerald-400 font-bold whitespace-nowrap">{log.upstream_url}</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -145,3 +155,4 @@
 		<pre class="overflow-auto p-5 font-mono text-xs leading-6" style="background-color: var(--inverse-surface); color: var(--inverse-on-surface)">{caddyfile}</pre>
 	</section>
 </AppShell>
+Shell>

@@ -9,10 +9,12 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/VedantJJA/devpnl/internal/db"
 )
+
 
 // XDevPanelProject is an internal request header set by rootRouter when dispatching
 // a request via Referer-based routing. HandleProjectReverseProxy reads it to
@@ -114,25 +116,75 @@ func findContainerPort(containers []ContainerSummary, bpID, bpName, serviceName 
 	return 0
 }
 
+// RouteLogEntry records a routing decision for the Debug Panel.
+type RouteLogEntry struct {
+	Timestamp   string            `json:"timestamp"`
+	Method      string            `json:"method"`
+	Host        string            `json:"host"`
+	Path        string            `json:"path"`
+	Mode        string            `json:"mode"`
+	ResolvedSlug string           `json:"resolved_slug"`
+	ProjectID   string            `json:"project_id"`
+	ServiceName string            `json:"service_name"`
+	ServiceType string            `json:"service_type"`
+	TargetPort  int               `json:"target_port"`
+	IsApiReroute bool             `json:"is_api_reroute"`
+	UpstreamURL string            `json:"upstream_url"`
+	Headers     map[string]string `json:"headers,omitempty"`
+}
+
+var (
+	routeLogMu   sync.RWMutex
+	routeLogRing []RouteLogEntry
+)
+
+func recordRouteLog(entry RouteLogEntry) {
+	routeLogMu.Lock()
+	defer routeLogMu.Unlock()
+	entry.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	routeLogRing = append(routeLogRing, entry)
+	if len(routeLogRing) > 50 {
+		routeLogRing = routeLogRing[1:]
+	}
+}
+
+// HandleGetRouteLogs returns the last 50 routing decisions for the UI Debug Panel.
+func HandleGetRouteLogs() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		routeLogMu.RLock()
+		logs := append([]RouteLogEntry(nil), routeLogRing...)
+		routeLogMu.RUnlock()
+		if logs == nil {
+			logs = []RouteLogEntry{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"routes": logs})
+	}
+}
+
 // HandleProjectReverseProxy handles routing for /app/{slug}/ and subdomain routing ({slug}.domain.com).
-// It resolves the target service by slug (Render-style), and automatically reroutes /api/* requests
-// from a static/frontend service to the project's web/backend service container.
+// It resolves the target service by slug (Render-style), supports /app/{project}/{service}/ subpathing,
+// and automatically reroutes API/XHR requests from a static/frontend service to the project's web/backend container.
 func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Parse service slug from either URL Path or Subdomain Host header
+		// Parse service slug or project/service pair from URL Path or Subdomain Host header
 		host := strings.Split(r.Host, ":")[0]
 		subParts := strings.Split(host, ".")
 
 		resolvedSlug := ""
-		serviceName := ""
-		projectName := ""
+		subServiceInPath := ""
+		prefixToStrip := ""
 
-		// 1. Try URL Path /app/{slug}/...
+		// 1. Try URL Path /app/{slug}/... or /app/{project}/{service}/...
 		if strings.HasPrefix(r.URL.Path, "/app/") {
 			p := strings.TrimPrefix(r.URL.Path, "/app/")
 			parts := strings.Split(strings.Trim(p, "/"), "/")
 			if len(parts) > 0 && parts[0] != "" {
 				resolvedSlug = parts[0]
+				prefixToStrip = "/app/" + parts[0]
+				if len(parts) >= 2 && parts[1] != "" {
+					subServiceInPath = parts[1]
+				}
 			}
 		}
 
@@ -160,13 +212,16 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			return
 		}
 
-		// --- Resolve service by slug (Render-style) ---
-		// First try: exact slug match on the services table
+		// --- Resolve service by slug or project name ---
 		svcBySlug, _ := database.FindServiceBySlug(r.Context(), resolvedSlug)
 
 		var bp *db.BlueprintRecord
 		var svcs []db.ServiceRecord
 		var targetSvc *db.ServiceRecord
+		projectName := ""
+		var serviceName string
+
+
 
 		if svcBySlug != nil {
 			// Slug matched a specific service
@@ -182,11 +237,10 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			svcs, _ = database.ListServices(r.Context(), bp.ID)
 			targetSvc = svcBySlug
 		} else {
-			// Fallback: try resolving as project name/ID (backward compat)
+			// Fallback: try resolving as project name/ID
 			var err error
 			bp, err = database.GetBlueprint(r.Context(), resolvedSlug)
 			if err != nil || bp == nil {
-				// Also check by service name (legacy lookup)
 				if svcCheck, _ := database.FindServiceByName(r.Context(), resolvedSlug); svcCheck != nil {
 					projectName = svcCheck.ProjectID
 					serviceName = svcCheck.Name
@@ -209,11 +263,13 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 				return
 			}
 
-			// Try matching service name from path or legacy
-			if serviceName != "" {
+			// Check if subServiceInPath matches a service in the project (e.g. /app/project/backend/...)
+			if subServiceInPath != "" {
 				for i := range svcs {
-					if strings.EqualFold(svcs[i].Name, serviceName) || strings.EqualFold(svcs[i].Slug, serviceName) {
+					if strings.EqualFold(svcs[i].Name, subServiceInPath) || strings.EqualFold(svcs[i].Slug, subServiceInPath) {
 						targetSvc = &svcs[i]
+						serviceName = svcs[i].Name
+						prefixToStrip = "/app/" + resolvedSlug + "/" + subServiceInPath
 						break
 					}
 				}
@@ -241,51 +297,48 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			}
 		}
 
-		// Set cookie for referer-based routing fallback (scoped to /app/<slug>/)
+		if serviceName == "" && targetSvc != nil {
+			serviceName = targetSvc.Name
+		}
+
+
+		// Set cookie for referer-based routing fallback
 		if resolvedSlug != "" {
 			http.SetCookie(w, &http.Cookie{
 				Name:     "devpanel_project",
 				Value:    resolvedSlug,
-				Path:     fmt.Sprintf("/app/%s/", resolvedSlug),
+				Path:     "/",
 				SameSite: http.SameSiteLaxMode,
 			})
 		}
 
-		// --- Frontend→Backend API reroute ---
-		// If the target service is a "static" (frontend) type, and the request path
-		// is an API call (/api/*), automatically reroute to the project's "web" (backend) service.
-		isApiReq := false
+		// --- Frontend→Backend API / Data / XHR Reroute ---
+		// Determine the relative path after stripping the /app prefix
 		requestPath := r.URL.Path
-		if strings.HasPrefix(requestPath, "/app/") {
-			// Strip /app/{slug}/ prefix to get the relative path
-			stripped := strings.TrimPrefix(requestPath, "/app/")
-			parts := strings.SplitN(stripped, "/", 2)
-			if len(parts) == 2 {
-				requestPath = "/" + parts[1]
-			} else {
-				requestPath = "/"
+		if prefixToStrip != "" && strings.HasPrefix(requestPath, prefixToStrip) {
+			requestPath = strings.TrimPrefix(requestPath, prefixToStrip)
+			if requestPath == "" || !strings.HasPrefix(requestPath, "/") {
+				requestPath = "/" + requestPath
 			}
 		}
-		isApiReq = strings.HasPrefix(requestPath, "/api/") || requestPath == "/api"
 
+		cleanReqPath := strings.ToLower(requestPath)
+		isApiReq := strings.HasPrefix(cleanReqPath, "/api/") || cleanReqPath == "/api" ||
+			strings.HasPrefix(cleanReqPath, "/data/") || cleanReqPath == "/data" ||
+			strings.HasPrefix(cleanReqPath, "/auth/") || cleanReqPath == "/auth" ||
+			strings.HasPrefix(cleanReqPath, "/admin/") || cleanReqPath == "/admin" ||
+			r.Method == http.MethodPost || r.Method == http.MethodPut ||
+			r.Method == http.MethodPatch || r.Method == http.MethodDelete ||
+			r.Header.Get("X-Requested-With") == "XMLHttpRequest" ||
+			strings.Contains(r.Header.Get("Accept"), "application/json")
+
+		wasRerouted := false
 		if targetSvc != nil && targetSvc.Type == "static" && isApiReq {
-			// Find the web/backend service in the same project
 			for i := range svcs {
 				if svcs[i].Type == "web" {
 					targetSvc = &svcs[i]
 					serviceName = svcs[i].Name
-					break
-				}
-			}
-		}
-
-		// Even if we didn't match via slug initially and matched via old project lookup,
-		// check for /api/* rerouting on any non-backend service
-		if targetSvc != nil && targetSvc.Type != "web" && isApiReq {
-			for i := range svcs {
-				if svcs[i].Type == "web" {
-					targetSvc = &svcs[i]
-					serviceName = svcs[i].Name
+					wasRerouted = true
 					break
 				}
 			}
@@ -308,11 +361,28 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			containerPort = targetPort
 		}
 
-		targetURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", containerPort))
+		upstreamAddr := fmt.Sprintf("http://127.0.0.1:%d", containerPort)
+		targetURL, err := url.Parse(upstreamAddr)
 		if err != nil {
 			http.Error(w, "Invalid proxy target", http.StatusInternalServerError)
 			return
 		}
+
+		// Record routing decision for Debug Panel
+		recordRouteLog(RouteLogEntry{
+			Method:       r.Method,
+			Host:         host,
+			Path:         r.URL.Path,
+			Mode:         currentRoutingMode,
+			ResolvedSlug: resolvedSlug,
+			ProjectID:    projectName,
+			ServiceName:  serviceName,
+
+			ServiceType:  targetSvc.Type,
+			TargetPort:   containerPort,
+			IsApiReroute: wasRerouted,
+			UpstreamURL:  upstreamAddr,
+		})
 
 		// Reverse proxy handler with retry transport for container boot resilience
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
@@ -322,7 +392,6 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			},
 		}
 
-		// Use the resolved slug for subpath-based HTML rewriting
 		proxySlug := resolvedSlug
 
 		// Dynamically rewrite HTML base and asset URLs to support subpath hosting (/app/{slug}/)
@@ -339,7 +408,6 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 				resp.Body.Close()
 
 				htmlStr := string(bodyBytes)
-
 				subpath := fmt.Sprintf("/app/%s/", proxySlug)
 
 				if !strings.Contains(htmlStr, "<base ") && !strings.Contains(htmlStr, "<BASE ") {
@@ -408,13 +476,11 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			}
 		}
 
-		// Strip /app/{slug} prefix from request path if present, so upstream sees relative paths
-		if strings.HasPrefix(r.URL.Path, "/app/") {
-			stripped := strings.TrimPrefix(r.URL.Path, "/app/")
-			parts := strings.SplitN(stripped, "/", 2)
-			relPath := "/"
-			if len(parts) == 2 {
-				relPath = "/" + parts[1]
+		// Strip /app/{slug} or /app/{project}/{service} prefix from request path if present
+		if prefixToStrip != "" && strings.HasPrefix(r.URL.Path, prefixToStrip) {
+			relPath := strings.TrimPrefix(r.URL.Path, prefixToStrip)
+			if relPath == "" || !strings.HasPrefix(relPath, "/") {
+				relPath = "/" + relPath
 			}
 			r.URL.Path = relPath
 		}
@@ -422,4 +488,5 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		proxy.ServeHTTP(w, r)
 	}
 }
+
 
