@@ -360,8 +360,12 @@ func main() {
 			referer := r.Header.Get("Referer")
 			if idx := strings.Index(referer, "/app/"); idx >= 0 {
 				rest := referer[idx+5:] // after "/app/"
+				if qIdx := strings.IndexAny(rest, "?#"); qIdx >= 0 {
+					rest = rest[:qIdx]
+				}
 				serviceSlug = strings.SplitN(rest, "/", 2)[0]
 			}
+
 
 			if serviceSlug == "" {
 				if cookie, err := r.Cookie("devpanel_project"); err == nil && cookie.Value != "" {
@@ -460,7 +464,8 @@ func isDevPanelAdminRoute(p string) bool {
 		"/api/metrics",
 		"/api/logs",
 		"/api/system",
-		"/api/debug/",
+		"/api/proxy",
+		"/api/debug",
 	}
 
 	for _, prefix := range adminPrefixes {
@@ -470,6 +475,7 @@ func isDevPanelAdminRoute(p string) bool {
 	}
 	return false
 }
+
 
 
 // routingModeCache caches the routing_mode and base_domain settings to avoid a

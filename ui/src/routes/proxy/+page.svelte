@@ -22,10 +22,6 @@
 			const sRes = await fetch('/api/system/stats');
 			if (sRes.ok) { const s = await sRes.json(); systemStats = { ...systemStats, ...s }; }
 			
-			try {
-				const cRes = await fetch('/api/proxy/routes');
-				if (cRes.ok) { const d = await cRes.json(); routes = d.routes || []; }
-			} catch { routes = []; }
 
 			try {
 				const dbgRes = await fetch('/api/debug/routes');
