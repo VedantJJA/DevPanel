@@ -166,16 +166,85 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 			portSuffix = baseDomain[idx:]
 		}
 
-		// Persist per-service settings with Render/Coolify-style unique URL slugs and FQDNs
+		// Pre-pass: map backend and database services for inter-service env injection
+		var backendFQDN string
+		var dbServiceName string
+		var redisServiceName string
+
+		type preparedSvc struct {
+			s    createServiceIn
+			slug string
+			fqdn string
+		}
+		prepList := make([]preparedSvc, 0, len(req.Services))
+
 		for _, s := range req.Services {
 			slug := generateUniqueSlug(r.Context(), database, s.Name)
 			fqdn := fmt.Sprintf("%s://%s.%s%s", scheme, slug, baseDomainHost, portSuffix)
 			if s.CustomDomain != "" {
 				fqdn = s.CustomDomain
 			}
+			prepList = append(prepList, preparedSvc{s: s, slug: slug, fqdn: fqdn})
+
+			if s.Type == "web" || strings.Contains(strings.ToLower(s.Name), "backend") || strings.Contains(strings.ToLower(s.Name), "api") {
+				if backendFQDN == "" {
+					backendFQDN = fqdn
+				}
+			}
+			if s.Type == "database" || strings.Contains(strings.ToLower(s.Name), "db") || strings.Contains(strings.ToLower(s.Name), "postgres") {
+				if dbServiceName == "" {
+					dbServiceName = s.Name
+				}
+			}
+			if strings.Contains(strings.ToLower(s.Name), "redis") {
+				if redisServiceName == "" {
+					redisServiceName = s.Name
+				}
+			}
+		}
+
+		// Persist per-service settings with Render/Coolify-style unique URL slugs, FQDNs, and magic env vars
+		for _, prep := range prepList {
+			s := prep.s
+			if s.EnvVars == nil {
+				s.EnvVars = make(map[string]string)
+			}
+
+			// Auto-inject SERVICE_FQDN_... and SERVICE_URL_... for all services in project
+			for _, other := range prepList {
+				upperName := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(other.s.Name, "-", "_"), ".", "_"))
+				if _, ok := s.EnvVars["SERVICE_FQDN_"+upperName]; !ok {
+					s.EnvVars["SERVICE_FQDN_"+upperName] = fmt.Sprintf("%s.%s", other.slug, baseDomainHost)
+				}
+				if _, ok := s.EnvVars["SERVICE_URL_"+upperName]; !ok {
+					s.EnvVars["SERVICE_URL_"+upperName] = other.fqdn
+				}
+			}
+
+			// Inter-container hostname injection
+			if dbServiceName != "" {
+				if _, ok := s.EnvVars["DB_HOST"]; !ok {
+					s.EnvVars["DB_HOST"] = dbServiceName
+				}
+			}
+			if redisServiceName != "" {
+				if _, ok := s.EnvVars["REDIS_HOST"]; !ok {
+					s.EnvVars["REDIS_HOST"] = redisServiceName
+				}
+			}
+
+			// Frontend SPA backend URL injection
+			if s.Type == "static" && backendFQDN != "" {
+				if _, ok := s.EnvVars["BACKEND_URL"]; !ok {
+					s.EnvVars["BACKEND_URL"] = backendFQDN
+				}
+				if _, ok := s.EnvVars["VITE_BACKEND_URL"]; !ok {
+					s.EnvVars["VITE_BACKEND_URL"] = backendFQDN
+				}
+			}
 
 			rec := &db.ServiceRecord{
-				ProjectID: projectID, Name: s.Name, Slug: slug, FQDN: fqdn, Type: s.Type, Image: s.Image,
+				ProjectID: projectID, Name: s.Name, Slug: prep.slug, FQDN: prep.fqdn, Type: s.Type, Image: s.Image,
 				EnvVars: s.EnvVars, Port: s.Port, CustomDomain: s.CustomDomain,
 				AutoDeploy: s.AutoDeploy, BuildCommand: s.BuildCommand,
 				StartCommand: s.StartCommand, InstanceType: orDefault(s.InstanceType, "free"),
@@ -185,6 +254,7 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 				log.Printf("api: upsert service %s: %v", s.Name, err)
 			}
 		}
+
 
 
 		svcs, _ := database.ListServices(r.Context(), projectID)

@@ -272,22 +272,16 @@ func main() {
 	// Project Reverse Proxy Handler
 	projectProxyHandler := docker.HandleProjectReverseProxy(database, dockClient)
 
-	// Coolify-Style FQDN Router
+	// Coolify-Style Complete Domain Router
 	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. Coolify Primary Lookup: Check if r.Host matches any service's FQDN
+		// 1. Check if r.Host matches any service FQDN or custom domain
 		svcFQDN, _ := database.FindServiceByFQDN(r.Context(), r.Host)
 		if svcFQDN != nil {
 			projectProxyHandler.ServeHTTP(w, r)
 			return
 		}
 
-		// 2. Explicit /app/ subpath request -> Project Proxy
-		if strings.HasPrefix(r.URL.Path, "/app/") {
-			projectProxyHandler.ServeHTTP(w, r)
-			return
-		}
-
-		// 3. Subdomain fallback -> Project Proxy
+		// 2. Check if request is on a project subdomain
 		hostWithoutPort := strings.Split(r.Host, ":")[0]
 		firstSub := strings.ToLower(strings.Split(hostWithoutPort, ".")[0])
 		isProjectSubdomain := firstSub != "localhost" && firstSub != "127" &&
@@ -299,23 +293,11 @@ func main() {
 			return
 		}
 
-		// 4. Application API/Data calls (/api/* or /data/*) made by hosted SPAs
-		if !isDevPanelAdminRoute(r.URL.Path) && (strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/data/")) {
+		// 3. Application API/Data calls (/api/* or /data/*) made by hosted SPAs
+		if !isDevPanelAdminRoute(r.URL.Path) && (strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/data/") || strings.HasPrefix(r.URL.Path, "/auth/")) {
 			serviceSlug := ""
-
-			referer := r.Header.Get("Referer")
-			if idx := strings.Index(referer, "/app/"); idx >= 0 {
-				rest := referer[idx+5:] // after "/app/"
-				if qIdx := strings.IndexAny(rest, "?#"); qIdx >= 0 {
-					rest = rest[:qIdx]
-				}
-				serviceSlug = strings.SplitN(rest, "/", 2)[0]
-			}
-
-			if serviceSlug == "" {
-				if cookie, err := r.Cookie("devpanel_project"); err == nil && cookie.Value != "" {
-					serviceSlug = cookie.Value
-				}
+			if cookie, err := r.Cookie("devpanel_project"); err == nil && cookie.Value != "" {
+				serviceSlug = cookie.Value
 			}
 
 			if serviceSlug != "" {
@@ -326,9 +308,10 @@ func main() {
 			}
 		}
 
-		// 5. Default: DevPanel Admin Panel (Dashboard UI & Admin API)
+		// 4. Default: DevPanel Admin Panel (Dashboard UI & Admin API)
 		mux.ServeHTTP(w, r)
 	})
+
 
 
 

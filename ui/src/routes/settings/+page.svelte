@@ -170,114 +170,32 @@
 						</div>
 					</div>
 
-					<!-- Coolify-style Universal Routing Info -->
+					<!-- Coolify-style Universal Domain Routing Info -->
 					<div class="space-y-2">
 						<label id="routing-label" class="block text-sm font-semibold">
 							<span class="flex items-center gap-2">
 								<span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white" style="background-color: var(--primary)">2</span>
-								Universal Domain & Proxy Architecture (Coolify-Style)
+								Coolify Domain Hosting & Proxy Architecture
 							</span>
 						</label>
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-							<div class="p-4 border border-emerald-500/30 rounded-xl text-left flex flex-col gap-1 bg-emerald-500/5">
-								<div class="flex items-center justify-between font-bold text-sm text-emerald-400">
-									<span>Subdomains & FQDNs</span>
-									<span class="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded font-bold uppercase border border-emerald-500/30">Active</span>
-								</div>
-								<code class="text-xs font-mono font-bold mt-1 text-emerald-300">http://&lt;slug&gt;.klouds.online</code>
-								<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Direct hostname routing per service. Assign custom domains or wildcards per service.</p>
+						<div class="p-4 border border-emerald-500/30 rounded-xl text-left flex flex-col gap-2 bg-emerald-500/5">
+							<div class="flex items-center justify-between font-bold text-sm text-emerald-400">
+								<span>Domain-First Host Proxying</span>
+								<span class="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded font-bold uppercase border border-emerald-500/30">Active</span>
 							</div>
-
-							<div class="p-4 border border-blue-500/30 rounded-xl text-left flex flex-col gap-1 bg-blue-500/5">
-								<div class="flex items-center justify-between font-bold text-sm text-blue-400">
-									<span>App Subpaths</span>
-									<span class="text-[10px] bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded font-bold uppercase border border-blue-500/30">Active</span>
-								</div>
-								<code class="text-xs font-mono font-bold mt-1 text-blue-300">http://klouds.online/app/&lt;slug&gt;/</code>
-								<p class="text-xs mt-1" style="color: var(--on-surface-variant)">Universal path fallback. Works on any IP or domain with zero DNS setup.</p>
-							</div>
-						</div>
-					</div>
-
-					<!-- Step 2: Routing Mode -->
-					<div class="space-y-2">
-						<label id="routing-label" class="block text-sm font-semibold">
-							<span class="flex items-center gap-2">
-								<span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white" style="background-color: var(--primary)">3</span>
-								Active Routing Mode
-							</span>
-						</label>
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-							<button
-								type="button"
-								onclick={() => (routingMode = 'path')}
-								class="p-4 border-2 rounded-xl text-left transition-all flex flex-col gap-1"
-								style={routingMode === 'path' ? 'border-color: var(--primary); background-color: var(--surface-low);' : 'border-color: var(--outline-variant); background-color: var(--surface-lowest);'}
-							>
-								<div class="flex items-center justify-between font-bold text-sm">
-									<span>Path-Based Routing</span>
-									{#if routingMode === 'path'}<span class="text-[10px] bg-primary text-white px-2 py-0.5 rounded font-bold uppercase">Active</span>{/if}
-								</div>
-								<code class="text-xs font-mono font-bold mt-1" style="color: var(--primary)">{previewScheme}://{baseDomain}/app/my-project/</code>
-							</button>
-
-							<button
-								type="button"
-								onclick={() => (routingMode = 'subdomain')}
-								class="p-4 border-2 rounded-xl text-left transition-all flex flex-col gap-1"
-								style={routingMode === 'subdomain' ? 'border-color: var(--primary); background-color: var(--surface-low);' : 'border-color: var(--outline-variant); background-color: var(--surface-lowest);'}
-							>
-								<div class="flex items-center justify-between font-bold text-sm">
-									<span>Subdomain Routing</span>
-									{#if routingMode === 'subdomain'}<span class="text-[10px] bg-primary text-white px-2 py-0.5 rounded font-bold uppercase">Active</span>{/if}
-								</div>
-								<code class="text-xs font-mono font-bold mt-1" style="color: var(--primary)">{previewScheme}://my-project.{baseDomain}/</code>
-							</button>
-						</div>
-
-						<!-- Localhost warning for subdomain mode -->
-						{#if isLocalhostWarning}
-						<div class="flex items-start gap-3 rounded-lg border p-3 text-xs" style="border-color: #b45309; background-color: #fef3c7; color: #92400e;">
-							<span class="material-symbols-outlined shrink-0" style="font-size: 18px">warning</span>
-							<div>
-								<p class="font-bold">Subdomain routing won't work with <code>localhost</code></p>
-								<p class="mt-1">Browsers don't support wildcard subdomains on localhost. Access DevPanel via your server IP or custom domain to use subdomain routing.</p>
-							</div>
-						</div>
-						{/if}
-
-						<!-- DNS guide for subdomain mode with custom domain -->
-						{#if routingMode === 'subdomain' && !isLocalhostWarning}
-						<div class="rounded-lg border p-4 text-xs space-y-2" style="border-color: var(--outline-variant); background-color: var(--surface-low)">
-							<p class="font-bold flex items-center gap-2" style="color: var(--on-surface)">
-								<span class="material-symbols-outlined" style="font-size: 16px; color: var(--primary)">dns</span>
-								Required DNS configuration (one-time, in your domain registrar)
+							<code class="text-xs font-mono font-bold text-emerald-300">http://&lt;service-slug&gt;.{baseDomain}</code>
+							<p class="text-xs" style="color: var(--on-surface-variant)">
+								Every service is assigned an FQDN. Incoming requests route directly by Host header to container ports. Single-domain multi-service projects automatically route <code>/api/*</code> requests to backend containers.
 							</p>
-							<table class="w-full text-left">
-								<thead><tr style="color: var(--on-surface-variant)"><th class="pb-1 pr-4">Type</th><th class="pb-1 pr-4">Name</th><th class="pb-1">Value</th></tr></thead>
-								<tbody style="font-family: monospace">
-									<tr>
-										<td class="pr-4 font-bold">A</td>
-										<td class="pr-4">*</td>
-										<td style="color: var(--primary)">{baseDomain.split(':')[0]}</td>
-									</tr>
-									<tr>
-										<td class="pr-4 font-bold">A</td>
-										<td class="pr-4">@</td>
-										<td style="color: var(--primary)">{baseDomain.split(':')[0]}</td>
-									</tr>
-								</tbody>
-							</table>
-							<p style="color: var(--on-surface-variant)">Add a wildcard <code>A</code> record pointing <code>*</code> to your server IP. This makes <code>vtopcc.{baseDomain.split(':')[0]}</code>, <code>myapp.{baseDomain.split(':')[0]}</code>, etc. all resolve to your server.</p>
 						</div>
-						{/if}
 					</div>
 
 					<button onclick={saveRoutingSettings} class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-opacity hover:opacity-90" style="background-color: var(--primary); color: var(--on-primary)">
-						<span class="material-symbols-outlined" style="font-size: 18px">save</span>Save Routing Settings
+						<span class="material-symbols-outlined" style="font-size: 18px">save</span>Save Server Domain
 					</button>
 				</section>
 			{/if}
+
 
 			{#if active === 'GitHub'}
 				<section class="card-surface p-5">

@@ -280,23 +280,18 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 
 		// --- Frontend→Backend API / Data / XHR Reroute ---
 		// Determine the relative path after stripping the /app prefix
-		requestPath := r.URL.Path
-		if prefixToStrip != "" && strings.HasPrefix(requestPath, prefixToStrip) {
-			requestPath = strings.TrimPrefix(requestPath, prefixToStrip)
-			if requestPath == "" || !strings.HasPrefix(requestPath, "/") {
-				requestPath = "/" + requestPath
-			}
-		}
-
-		cleanReqPath := strings.ToLower(requestPath)
+		cleanReqPath := strings.ToLower(r.URL.Path)
 		isApiReq := strings.HasPrefix(cleanReqPath, "/api/") || cleanReqPath == "/api" ||
 			strings.HasPrefix(cleanReqPath, "/data/") || cleanReqPath == "/data" ||
 			strings.HasPrefix(cleanReqPath, "/auth/") || cleanReqPath == "/auth" ||
 			strings.HasPrefix(cleanReqPath, "/admin/") || cleanReqPath == "/admin" ||
+			strings.HasPrefix(cleanReqPath, "/health") || cleanReqPath == "/healthz" ||
+			strings.HasPrefix(cleanReqPath, "/ws") ||
 			r.Method == http.MethodPost || r.Method == http.MethodPut ||
 			r.Method == http.MethodPatch || r.Method == http.MethodDelete ||
 			r.Header.Get("X-Requested-With") == "XMLHttpRequest" ||
 			strings.Contains(r.Header.Get("Accept"), "application/json")
+
 
 		wasRerouted := false
 		if targetSvc != nil && targetSvc.Type == "static" && isApiReq {
