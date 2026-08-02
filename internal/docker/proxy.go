@@ -162,58 +162,50 @@ func HandleGetRouteLogs() http.HandlerFunc {
 	}
 }
 
-// HandleProjectReverseProxy handles routing for /app/{slug}/ and subdomain routing ({slug}.domain.com).
-// It resolves the target service by slug (Render-style), supports /app/{project}/{service}/ subpathing,
+// HandleProjectReverseProxy handles Coolify-style FQDN routing and /app/{slug}/ subpath fallback.
+// It resolves the target service by FQDN (Host header match) or slug,
 // and automatically reroutes API/XHR requests from a static/frontend service to the project's web/backend container.
 func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Parse service slug or project/service pair from URL Path or Subdomain Host header
 		host := strings.Split(r.Host, ":")[0]
-		subParts := strings.Split(host, ".")
 
 		resolvedSlug := ""
-		subServiceInPath := ""
 		prefixToStrip := ""
 
-		// 1. Try URL Path /app/{slug}/... or /app/{project}/{service}/...
-		if strings.HasPrefix(r.URL.Path, "/app/") {
+		// 1. Coolify Primary Lookup: Check if r.Host matches a stored service FQDN
+		svcFQDN, _ := database.FindServiceByFQDN(r.Context(), r.Host)
+
+		// 2. Try URL Path /app/{slug}/... or /app/{project}/{service}/...
+		if svcFQDN == nil && strings.HasPrefix(r.URL.Path, "/app/") {
 			p := strings.TrimPrefix(r.URL.Path, "/app/")
 			parts := strings.Split(strings.Trim(p, "/"), "/")
 			if len(parts) > 0 && parts[0] != "" {
 				resolvedSlug = parts[0]
 				prefixToStrip = "/app/" + parts[0]
-				if len(parts) >= 2 && parts[1] != "" {
-					subServiceInPath = parts[1]
+			}
+		}
+
+
+		// 3. Fallback: Check if subdomain prefix matches a slug
+		if svcFQDN == nil && resolvedSlug == "" {
+			subParts := strings.Split(host, ".")
+			if len(subParts) >= 2 {
+				first := strings.ToLower(subParts[0])
+				if first != "localhost" && first != "127" && first != "www" && first != "devpanel" && first != "panel" {
+					resolvedSlug = first
 				}
 			}
 		}
 
-		// 2. Try Subdomain resolution: {slug}.domain.com or {slug}.nip.io
-		if resolvedSlug == "" && len(subParts) >= 2 {
-			first := strings.ToLower(subParts[0])
-			if first != "localhost" && first != "127" && first != "www" && first != "devpanel" && first != "panel" {
-				resolvedSlug = first
-			}
-		}
-
-		// 3. Fallback: project/slug injected by rootRouter via referer/cookie dispatch
-		if resolvedSlug == "" {
+		// 4. Fallback: project/slug injected by rootRouter via referer/cookie dispatch
+		if svcFQDN == nil && resolvedSlug == "" {
 			if injected := r.Header.Get(XDevPanelProject); injected != "" {
 				resolvedSlug = injected
 			}
 		}
-		currentRoutingMode := r.Header.Get(XDevPanelRoutingMode)
-		// Always strip internal headers before forwarding to the upstream.
+		// Always strip internal header before forwarding upstream
 		r.Header.Del(XDevPanelProject)
 		r.Header.Del(XDevPanelRoutingMode)
-
-		if resolvedSlug == "" {
-			http.Error(w, "Project or service not found for host/path", http.StatusBadRequest)
-			return
-		}
-
-		// --- Resolve service by slug or project name ---
-		svcBySlug, _ := database.FindServiceBySlug(r.Context(), resolvedSlug)
 
 		var bp *db.BlueprintRecord
 		var svcs []db.ServiceRecord
@@ -221,85 +213,59 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 		projectName := ""
 		var serviceName string
 
-
-
-		if svcBySlug != nil {
-			// Slug matched a specific service
-			projectName = svcBySlug.ProjectID
-			serviceName = svcBySlug.Name
+		if svcFQDN != nil {
+			// Matched directly by Coolify-style FQDN
+			targetSvc = svcFQDN
+			projectName = svcFQDN.ProjectID
+			serviceName = svcFQDN.Name
+			resolvedSlug = svcFQDN.Slug
 
 			var err error
 			bp, err = database.GetBlueprint(r.Context(), projectName)
 			if err != nil || bp == nil {
-				http.Error(w, fmt.Sprintf("Project not found for service slug %q", resolvedSlug), http.StatusNotFound)
+				http.Error(w, fmt.Sprintf("Project not found for FQDN service %q", svcFQDN.Name), http.StatusNotFound)
 				return
 			}
 			svcs, _ = database.ListServices(r.Context(), bp.ID)
-			targetSvc = svcBySlug
-		} else {
-			// Fallback: try resolving as project name/ID
-			var err error
-			bp, err = database.GetBlueprint(r.Context(), resolvedSlug)
-			if err != nil || bp == nil {
-				if svcCheck, _ := database.FindServiceByName(r.Context(), resolvedSlug); svcCheck != nil {
-					projectName = svcCheck.ProjectID
-					serviceName = svcCheck.Name
-					bp, err = database.GetBlueprint(r.Context(), projectName)
-					if err != nil || bp == nil {
-						http.Error(w, fmt.Sprintf("Project or service %q not found", resolvedSlug), http.StatusNotFound)
-						return
-					}
-				} else {
-					http.Error(w, fmt.Sprintf("Project or service %q not found", resolvedSlug), http.StatusNotFound)
+		} else if resolvedSlug != "" {
+			svcBySlug, _ := database.FindServiceBySlug(r.Context(), resolvedSlug)
+			if svcBySlug != nil {
+				projectName = svcBySlug.ProjectID
+				serviceName = svcBySlug.Name
+				targetSvc = svcBySlug
+
+				var err error
+				bp, err = database.GetBlueprint(r.Context(), projectName)
+				if err != nil || bp == nil {
+					http.Error(w, fmt.Sprintf("Project not found for service slug %q", resolvedSlug), http.StatusNotFound)
 					return
 				}
-			} else {
+				svcs, _ = database.ListServices(r.Context(), bp.ID)
+			}
+		}
+
+		if targetSvc == nil && resolvedSlug != "" {
+			var err error
+			bp, err = database.GetBlueprint(r.Context(), resolvedSlug)
+			if err == nil && bp != nil {
 				projectName = bp.ID
-			}
-
-			svcs, _ = database.ListServices(r.Context(), bp.ID)
-			if len(svcs) == 0 {
-				http.Error(w, fmt.Sprintf("No active services for project %q", projectName), http.StatusNotFound)
-				return
-			}
-
-			// Check if subServiceInPath matches a service in the project (e.g. /app/project/backend/...)
-			if subServiceInPath != "" {
-				for i := range svcs {
-					if strings.EqualFold(svcs[i].Name, subServiceInPath) || strings.EqualFold(svcs[i].Slug, subServiceInPath) {
-						targetSvc = &svcs[i]
-						serviceName = svcs[i].Name
-						prefixToStrip = "/app/" + resolvedSlug + "/" + subServiceInPath
-						break
-					}
+				svcs, _ = database.ListServices(r.Context(), bp.ID)
+				if len(svcs) > 0 {
+					targetSvc = &svcs[0]
+					serviceName = targetSvc.Name
 				}
 			}
+		}
 
-			// Default to static (frontend) first, then web
-			if targetSvc == nil {
-				for i := range svcs {
-					if svcs[i].Type == "static" {
-						targetSvc = &svcs[i]
-						break
-					}
-				}
-			}
-			if targetSvc == nil {
-				for i := range svcs {
-					if svcs[i].Type == "web" {
-						targetSvc = &svcs[i]
-						break
-					}
-				}
-			}
-			if targetSvc == nil {
-				targetSvc = &svcs[0]
-			}
+		if targetSvc == nil {
+			http.Error(w, "Project or service not found for host/path", http.StatusBadRequest)
+			return
 		}
 
 		if serviceName == "" && targetSvc != nil {
 			serviceName = targetSvc.Name
 		}
+
 
 
 		// Set cookie for referer-based routing fallback
@@ -373,7 +339,7 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			Method:       r.Method,
 			Host:         host,
 			Path:         r.URL.Path,
-			Mode:         currentRoutingMode,
+			Mode:         "fqdn",
 			ResolvedSlug: resolvedSlug,
 			ProjectID:    projectName,
 			ServiceName:  serviceName,
@@ -392,47 +358,6 @@ func HandleProjectReverseProxy(database *db.DB, dockClient *Client) http.Handler
 			},
 		}
 
-		proxySlug := resolvedSlug
-
-		// Dynamically rewrite HTML base and asset URLs to support subpath hosting (/app/{slug}/)
-		proxy.ModifyResponse = func(resp *http.Response) error {
-			if currentRoutingMode == "subdomain" {
-				return nil
-			}
-			contentType := resp.Header.Get("Content-Type")
-			if strings.Contains(contentType, "text/html") && resp.Body != nil {
-				bodyBytes, err := io.ReadAll(resp.Body)
-				if err != nil {
-					return nil
-				}
-				resp.Body.Close()
-
-				htmlStr := string(bodyBytes)
-				subpath := fmt.Sprintf("/app/%s/", proxySlug)
-
-				if !strings.Contains(htmlStr, "<base ") && !strings.Contains(htmlStr, "<BASE ") {
-					baseTag := fmt.Sprintf(`<head><base href="%s">`, subpath)
-					if strings.Contains(htmlStr, "<head>") {
-						htmlStr = strings.Replace(htmlStr, "<head>", baseTag, 1)
-					} else if strings.Contains(htmlStr, "<HEAD>") {
-						htmlStr = strings.Replace(htmlStr, "<HEAD>", baseTag, 1)
-					} else if strings.Contains(htmlStr, "<html>") {
-						htmlStr = strings.Replace(htmlStr, "<html>", "<html>"+baseTag, 1)
-					}
-				}
-
-				htmlStr = strings.ReplaceAll(htmlStr, `src="/assets/`, `src="assets/`)
-				htmlStr = strings.ReplaceAll(htmlStr, `href="/assets/`, `href="assets/`)
-				htmlStr = strings.ReplaceAll(htmlStr, `src="/static/`, `src="static/`)
-				htmlStr = strings.ReplaceAll(htmlStr, `href="/static/`, `href="static/`)
-
-				newBody := []byte(htmlStr)
-				resp.Body = io.NopCloser(bytes.NewReader(newBody))
-				resp.ContentLength = int64(len(newBody))
-				resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
-			}
-			return nil
-		}
 
 		proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
 			isAPI := strings.Contains(req.URL.Path, "/api") ||

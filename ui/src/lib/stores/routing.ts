@@ -69,28 +69,20 @@ export function getServiceUrl(
 	projectName: string,
 	serviceName: string,
 	config?: RoutingConfig,
-	serviceSlug?: string
+	serviceSlug?: string,
+	serviceFQDN?: string
 ): string {
+	if (serviceFQDN && serviceFQDN.trim() !== '') {
+		return serviceFQDN;
+	}
 	const cfg = config ?? get(routingConfig);
 	const runtimeCfg = getConfig();
-	const mode = cfg?.mode || runtimeCfg.routingMode;
 	const rootDomain = cfg?.baseDomain || runtimeCfg.rootDomain;
 
-	// Prefer slug over service name for URL generation (Render-style)
 	const urlIdentifier = serviceSlug || serviceName || projectName;
+	const isLocal = isLocalDomain(rootDomain);
+	const scheme = isLocal ? 'http' : 'https';
 
-	if (mode === 'subdomain') {
-		return buildUrl({
-			routingMode: 'subdomain',
-			rootDomain: rootDomain,
-			projectName: urlIdentifier,
-			path: '/'
-		});
-	}
-	return buildUrl({
-		routingMode: 'path',
-		rootDomain: rootDomain,
-		projectName: urlIdentifier,
-		path: '/'
-	});
+	return `${scheme}://${urlIdentifier}.${rootDomain.replace(/^panel\./, '')}/`;
 }
+

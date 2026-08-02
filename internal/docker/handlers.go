@@ -471,18 +471,6 @@ func HandleConfig(database *db.DB) http.HandlerFunc {
 			return
 		}
 
-		routingMode := os.Getenv("ROUTING_MODE")
-		if routingMode == "" {
-			if dbMode, err := database.GetSetting(r.Context(), "routing_mode"); err == nil && dbMode != "" {
-				routingMode = dbMode
-			} else {
-				routingMode = "path"
-			}
-		}
-		if routingMode != "subdomain" {
-			routingMode = "path"
-		}
-
 		rootDomain := os.Getenv("ROOT_DOMAIN")
 		if rootDomain == "" {
 			if dbDomain, err := database.GetSetting(r.Context(), "base_domain"); err == nil && dbDomain != "" {
@@ -504,7 +492,7 @@ func HandleConfig(database *db.DB) http.HandlerFunc {
 
 		json.NewEncoder(w).Encode(ConfigResponse{
 			RootDomain:  rootDomain,
-			RoutingMode: routingMode,
+			RoutingMode: "fqdn",
 			APIBase:     "/api",
 		})
 	}
@@ -528,9 +516,6 @@ func HandleSettings(database *db.DB) http.HandlerFunc {
 			if tok, ok := settings["github_token"]; ok && len(tok) > 8 {
 				settings["github_token"] = tok[:8] + "..." + tok[len(tok)-4:]
 			}
-			if _, ok := settings["routing_mode"]; !ok {
-				settings["routing_mode"] = "path"
-			}
 			reqHost := r.Header.Get("X-Forwarded-Host")
 			if reqHost == "" {
 				reqHost = r.Host
@@ -544,6 +529,7 @@ func HandleSettings(database *db.DB) http.HandlerFunc {
 				}
 			}
 			json.NewEncoder(w).Encode(settings)
+
 
 		case http.MethodPost:
 			var body map[string]string

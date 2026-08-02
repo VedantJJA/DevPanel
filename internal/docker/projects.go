@@ -47,12 +47,14 @@ type updateServiceRequest struct {
 	EnvVars      *map[string]string `json:"env_vars,omitempty"`
 	Port         *int               `json:"port,omitempty"`
 	CustomDomain *string            `json:"custom_domain,omitempty"`
+	FQDN         *string            `json:"fqdn,omitempty"`
 	AutoDeploy   *bool              `json:"auto_deploy,omitempty"`
 	BuildCommand *string            `json:"build_command,omitempty"`
 	StartCommand *string            `json:"start_command,omitempty"`
 	InstanceType *string            `json:"instance_type,omitempty"`
 	Runtime      *string            `json:"runtime,omitempty"`
 }
+
 
 func newDeploymentID() string {
 	b := make([]byte, 8)
@@ -149,11 +151,31 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 			log.Printf("api: create project blueprint: %v", err)
 		}
 
-		// Persist per-service settings with Render-style unique URL slugs
+		baseDomain, _ := database.GetSetting(r.Context(), "base_domain")
+		if baseDomain == "" {
+			baseDomain = "localhost:8090"
+		}
+		baseDomainHost := strings.Split(baseDomain, ":")[0]
+
+		scheme := "https"
+		if strings.Contains(baseDomain, "localhost") || strings.Contains(baseDomain, "127.0.0.1") {
+			scheme = "http"
+		}
+		portSuffix := ""
+		if idx := strings.Index(baseDomain, ":"); idx >= 0 {
+			portSuffix = baseDomain[idx:]
+		}
+
+		// Persist per-service settings with Render/Coolify-style unique URL slugs and FQDNs
 		for _, s := range req.Services {
 			slug := generateUniqueSlug(r.Context(), database, s.Name)
+			fqdn := fmt.Sprintf("%s://%s.%s%s", scheme, slug, baseDomainHost, portSuffix)
+			if s.CustomDomain != "" {
+				fqdn = s.CustomDomain
+			}
+
 			rec := &db.ServiceRecord{
-				ProjectID: projectID, Name: s.Name, Slug: slug, Type: s.Type, Image: s.Image,
+				ProjectID: projectID, Name: s.Name, Slug: slug, FQDN: fqdn, Type: s.Type, Image: s.Image,
 				EnvVars: s.EnvVars, Port: s.Port, CustomDomain: s.CustomDomain,
 				AutoDeploy: s.AutoDeploy, BuildCommand: s.BuildCommand,
 				StartCommand: s.StartCommand, InstanceType: orDefault(s.InstanceType, "free"),
@@ -163,6 +185,7 @@ func HandleCreateProject(database *db.DB) http.HandlerFunc {
 				log.Printf("api: upsert service %s: %v", s.Name, err)
 			}
 		}
+
 
 		svcs, _ := database.ListServices(r.Context(), projectID)
 		w.WriteHeader(http.StatusCreated)
@@ -373,6 +396,10 @@ func HandleUpdateService(database *db.DB) http.HandlerFunc {
 		if req.CustomDomain != nil {
 			existing.CustomDomain = *req.CustomDomain
 		}
+		if req.FQDN != nil {
+			existing.FQDN = *req.FQDN
+		}
+
 		if req.AutoDeploy != nil {
 			existing.AutoDeploy = *req.AutoDeploy
 		}

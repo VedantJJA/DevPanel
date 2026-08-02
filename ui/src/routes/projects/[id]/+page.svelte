@@ -745,7 +745,8 @@
 					</div>
 
 					<div class="flex flex-wrap gap-2">
-						<a href={getServiceUrl(projectData?.blueprint?.name || projectId, currentSvc.name, $routingConfig, currentSvc.slug)} target="_blank" rel="noreferrer" class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors hover:opacity-80" style="border-color: var(--outline-variant); background-color: var(--surface-lowest);">
+						<a href={getServiceUrl(projectData?.blueprint?.name || projectId, currentSvc.name, $routingConfig, currentSvc.slug, currentSvc.fqdn)} target="_blank" rel="noreferrer" class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors hover:opacity-80" style="border-color: var(--outline-variant); background-color: var(--surface-lowest);">
+
 							<span class="material-symbols-outlined" style="font-size: 18px">open_in_new</span>Visit Live Site
 						</a>
 						<button onclick={() => handleRestart(currentSvc!.name)} class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors hover:opacity-80" style="border-color: var(--outline-variant); background-color: var(--surface-lowest);">

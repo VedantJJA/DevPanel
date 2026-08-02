@@ -19,9 +19,9 @@ import (
 	"os/signal"
 	"path"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
+
 
 
 	"github.com/VedantJJA/devpnl/internal/caddy"
@@ -272,34 +272,34 @@ func main() {
 	// Project Reverse Proxy Handler
 	projectProxyHandler := docker.HandleProjectReverseProxy(database, dockClient)
 
-	// Coolify-style Unified HTTP Router.
-	// Supports subdomains (<slug>.domain.com), subpaths (/app/<slug>/), custom FQDNs,
-	// and API calls simultaneously without mode toggling.
+	// Coolify-Style FQDN Router
 	rootRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		hostWithoutPort := strings.Split(host, ":")[0]
-		_, baseDomain := getRoutingMode(r.Context(), database, r)
-		baseDomainHost := strings.Split(baseDomain, ":")[0]
-		firstSub := strings.ToLower(strings.Split(hostWithoutPort, ".")[0])
+		// 1. Coolify Primary Lookup: Check if r.Host matches any service's FQDN
+		svcFQDN, _ := database.FindServiceByFQDN(r.Context(), r.Host)
+		if svcFQDN != nil {
+			projectProxyHandler.ServeHTTP(w, r)
+			return
+		}
 
-		isProjectSubdomain := hostWithoutPort != baseDomainHost &&
-			hostWithoutPort != "panel."+baseDomainHost &&
-			firstSub != "localhost" && firstSub != "127" &&
-			firstSub != "panel" && firstSub != "devpanel" && firstSub != "www"
-
-		// 1. Explicit /app/ subpath request -> Project Proxy
+		// 2. Explicit /app/ subpath request -> Project Proxy
 		if strings.HasPrefix(r.URL.Path, "/app/") {
 			projectProxyHandler.ServeHTTP(w, r)
 			return
 		}
 
-		// 2. Project Subdomain or Custom FQDN -> Project Proxy
+		// 3. Subdomain fallback -> Project Proxy
+		hostWithoutPort := strings.Split(r.Host, ":")[0]
+		firstSub := strings.ToLower(strings.Split(hostWithoutPort, ".")[0])
+		isProjectSubdomain := firstSub != "localhost" && firstSub != "127" &&
+			firstSub != "panel" && firstSub != "devpanel" && firstSub != "www" &&
+			strings.Contains(hostWithoutPort, ".")
+
 		if isProjectSubdomain {
 			projectProxyHandler.ServeHTTP(w, r)
 			return
 		}
 
-		// 3. Application API/Data calls (/api/* or /data/*) made by hosted SPAs
+		// 4. Application API/Data calls (/api/* or /data/*) made by hosted SPAs
 		if !isDevPanelAdminRoute(r.URL.Path) && (strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/data/")) {
 			serviceSlug := ""
 
@@ -326,9 +326,10 @@ func main() {
 			}
 		}
 
-		// 4. Default: DevPanel Admin Panel (Dashboard UI & Admin API)
+		// 5. Default: DevPanel Admin Panel (Dashboard UI & Admin API)
 		mux.ServeHTTP(w, r)
 	})
+
 
 
 
@@ -421,52 +422,4 @@ func isDevPanelAdminRoute(p string) bool {
 
 
 
-// routingModeCache caches the routing_mode and base_domain settings to avoid a
-// DB round-trip on every HTTP request. The cache TTL is 30 seconds.
-var (
-	rmCache     string
-	bdCache     string
-	rmCacheAt   time.Time
-	rmCacheMu   sync.RWMutex
-)
 
-func getRoutingMode(ctx context.Context, database *db.DB, r *http.Request) (mode, baseDomain string) {
-	reqHost := ""
-	if r != nil {
-		reqHost = r.Header.Get("X-Forwarded-Host")
-		if reqHost == "" {
-			reqHost = r.Host
-		}
-		reqHost = strings.TrimPrefix(reqHost, "panel.")
-	}
-
-	rmCacheMu.RLock()
-	if time.Since(rmCacheAt) < 30*time.Second {
-		m, d := rmCache, bdCache
-		rmCacheMu.RUnlock()
-		if (d == "" || d == "localhost:8090") && reqHost != "" {
-			d = reqHost
-		}
-		return m, d
-	}
-	rmCacheMu.RUnlock()
-
-	rmCacheMu.Lock()
-	defer rmCacheMu.Unlock()
-	m, _ := database.GetSetting(ctx, "routing_mode")
-	d, _ := database.GetSetting(ctx, "base_domain")
-	if m == "" {
-		m = "path"
-	}
-	if d == "" || d == "localhost:8090" {
-		if reqHost != "" {
-			d = reqHost
-		} else {
-			d = "localhost:8090"
-		}
-	}
-	rmCache = m
-	bdCache = d
-	rmCacheAt = time.Now()
-	return m, d
-}
